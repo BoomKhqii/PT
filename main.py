@@ -1,4 +1,7 @@
-
+from Agents import personal
+from Agents.trading import SYSTEM_PROMPT as TRADING_PROMPT
+from Agents.academic import SYSTEM_PROMPT as ACADEMIC_PROMPT
+from Agents.personal import SYSTEM_PROMPT as PERSONAL_PROMPT
 import requests
 from router import route_request
 
@@ -6,20 +9,13 @@ MODEL = "qwen3.5:4b"
 
 AGENTS = {
     "trading": (
-        "You are PT's Trading Agent. "
-        "Specialize in algorithmic trading, backtesting, "
-        "risk management, and strategy analysis."
+        TRADING_PROMPT
     ),
     "academic": (
-        "You are PT's Academic Agent. "
-        "Help with computer science, university subjects, "
-        "learning concepts, and exam preparation."
+        ACADEMIC_PROMPT
     ),
     "personal": (
-        "You are PT's Personal Life Agent. "
-        "Help organize schedules, reminders, "
-        "daily activities, and personal tasks. "
-        "Do not claim to have saved a reminder unless a tool has done so."
+        PERSONAL_PROMPT
     ),
     "general": (
         "You are PT, a helpful local AI assistant."
