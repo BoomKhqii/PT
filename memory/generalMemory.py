@@ -7,7 +7,7 @@ conn.execute("""
     CREATE TABLE IF NOT EXISTS memory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         category TEXT NOT NULL,
-        content TEXT NOT NULL,
+        content TEXT NOT NULL
 
 """)
 
