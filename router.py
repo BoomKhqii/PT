@@ -6,13 +6,13 @@ MODEL = "qwen3.5:4b"
 
 def route_request(message):
     response = requests.post(
-        "http://localhost:11434/api/chat",
+        "http://localhost:11435/api/chat",
         json={
             "model": MODEL,
             "messages": [
                 {
                     # This is context of Qwen, which is the agent router. It will determine which agent to route the request to based on the message content.
-                    "role": "system",
+                    "agent": "system",
                     "content": (
                         "You are PT's agent router. "
                         "Choose the most appropriate agent for the request. "
@@ -25,7 +25,7 @@ def route_request(message):
                     )
                 },
                 {
-                    "role": "user",
+                    "agent": "user",
                     "content": message
                 }
             ],
