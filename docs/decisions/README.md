@@ -18,12 +18,12 @@
 | Trading execution?              | Not in initial scope                               |
 | Main engineering deliverable?   | Reliable, evaluated academic workflows             |
 
-### The flagship PT vision
+### Initial release workflow
 
 PT should evolve into a local-first, stateful AI operating platform: an assistant that understands requests, finds evidence in the user's documents, plans workflows, safely uses tools, remembers approved context, produces validated outputs, and continues scheduled work reliably.
 
-For your initial release, the central success story is simple:
+The initial release targets this end-to-end workflow:
 
 A user speaks a request, PT retrieves relevant university material, reasons over the evidence, generates a useful document, saves it correctly, and remembers the resulting task state.
 
-That end-to-end capability is a stronger foundation for an AI Engineer or Software Engineer portfolio than implementing dozens of disconnected Jarvis-style features. The Trading Agent can then build on the same infrastructure without forcing you to redesign the entire application.
+The Trading Agent is planned to reuse the shared infrastructure.

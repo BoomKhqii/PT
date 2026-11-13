@@ -28,4 +28,4 @@ The scheduler saves the event, calculates the trigger using the configured timez
 
 It must account for Windows sleep, restarts, missed executions, duplicate triggers, daylight-saving changes, and tasks that become invalid because an assessment date changes.
 
-Important distinction: A scheduler is not itself an autonomous agent. PT can add agent-based review of tasks later, but the initial scheduled execution should be deterministic and reliable.
+The initial scheduler uses deterministic execution. Agent-based review of scheduled tasks is a possible later extension.

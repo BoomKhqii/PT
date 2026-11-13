@@ -4,11 +4,9 @@
 
 > Target architecture derived from Project PT specification v3.0, November 2026. These are planned capabilities unless explicitly stated otherwise.
 
-This is PT's most important engineering subsystem.
-
 The orchestrator manages requests from initial input through final response. It is responsible for selecting workflows, delegating work, tracking state, and determining whether the requested operation succeeded.
 
-It should not be confused with the LLM itself.
+The orchestrator manages workflow execution and calls the LLM when needed.
 
 ### Processing workflow
 
@@ -56,6 +54,4 @@ A deterministic intent handler recognises the command, checks permission, calls 
 
 Complex request: "Hey PT, review my Data Science lectures and generate a revision PDF concentrating on topics I struggled with."
 
-This requires document retrieval, contextual memory, planning, summarization, PDF generation, validation, and file delivery. That justifies a multi-step agent workflow.
-
-LangGraph is suitable for the complex path because it supports explicit workflow state, checkpoints, errors, and human approval stages.
+This requires document retrieval, contextual memory, planning, summarization, PDF generation, validation, and file delivery.The design uses LangGraph for complex workflows, with support for explicit workflow state, checkpoints, errors, and human approval stages.

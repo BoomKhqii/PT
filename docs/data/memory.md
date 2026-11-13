@@ -4,9 +4,9 @@
 
 > Target architecture derived from Project PT specification v3.0, November 2026. These are planned capabilities unless explicitly stated otherwise.
 
-One of PT's distinguishing features should be persistent, user-controlled memory.
+PT plans to support persistent, user-controlled memory.
 
-However, memory and document retrieval are different problems and should not be implemented as one undifferentiated vector database.
+The design separates conversation and user memory from the document knowledge index.
 
 Memory Manager
 

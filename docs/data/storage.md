@@ -4,7 +4,7 @@
 
 > Target architecture derived from Project PT specification v3.0, November 2026. These are planned capabilities unless explicitly stated otherwise.
 
-SQLite is suitable for PT's initial single-user local installation. It stores structured operational records, while original documents and generated artifacts live in a managed file store.
+For the initial single-user installation, SQLite stores structured operational records, while original documents and generated artifacts live in a managed file store.
 
 ### Core entities
 

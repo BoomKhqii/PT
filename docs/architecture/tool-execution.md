@@ -56,7 +56,7 @@ Verify output and record audit event
 Return structured result to orchestrator
 ```
 
-A robust tool result should contain at least `status`, `output`, `error_code`, `artifacts`, and `execution_id`.
+A tool result should contain at least `status`, `output`, `error_code`, `artifacts`, and `execution_id`.
 
 ### Permission model
 

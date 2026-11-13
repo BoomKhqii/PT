@@ -4,8 +4,6 @@
 
 > Target architecture derived from Project PT specification v3.0, November 2026. These are planned capabilities unless explicitly stated otherwise.
 
-For engineering quality, PT needs measurable behavior, not just successful demonstrations.
-
 ### Error-handling policy
 
 | Failure                          | Expected behavior                           |

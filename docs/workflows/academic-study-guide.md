@@ -21,6 +21,6 @@ The workflow would be:
 9. Render: Generate the PDF in a temporary workspace, inspect the output, then publish it to the approved destination.
 10. Respond: Display the file in the dashboard, give its location, and report the actual completion status.
 
-This is a high-value flagship workflow because it combines retrieval, persistent state, reasoning, document generation, orchestration, and tool execution.
+This workflow combines retrieval, persistent state, reasoning, document generation, orchestration, and tool execution.
 
 It also creates measurable outcomes: correct retrieval, useful practice questions, reliable citations, successful file generation, and improved study performance.

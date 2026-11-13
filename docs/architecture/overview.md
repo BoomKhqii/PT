@@ -6,7 +6,7 @@
 
 PT (Personal Technology / Personal Assistant) is a Windows-first, locally hosted, modular AI assistant inspired by Jarvis. Its long-term purpose is to become an intelligent operating layer across your computer, academic work, daily productivity, and eventually algorithmic trading.
 
-The design preserves our previous decisions:
+The target design includes:
 
 - Local AI: Ollama, local speech recognition, local speech synthesis, and local data storage. No mandatory cloud AI.
 - Natural interaction: Wake words such as "Hey PT", voice conversations, an on-screen orb, subtitles, and text chat.
@@ -54,6 +54,4 @@ Windows applications · Local file system · Optional calendar sync · Future MT
 
 Security policy, permissions, validation, and audit logging apply across every layer.
 
-The architecture has one important principle: PT's AI decides what should be done, but trusted application code controls what is actually allowed to happen.
-
-That separation is essential for reliable computer automation, document operations, calendar management, and trading-related features.
+PT's AI proposes actions. Trusted application code enforces permissions and executes approved actions.

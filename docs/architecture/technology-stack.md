@@ -4,7 +4,7 @@
 
 > Target architecture derived from Project PT specification v3.0, November 2026. These are planned capabilities unless explicitly stated otherwise.
 
-This is the proposed implementation stack, balancing engineering depth with what you can realistically build and maintain as a solo developer.
+The table lists the proposed technologies and their responsibilities.
 
 | Layer               | Technology                         | Responsibility                    |
 | ------------------- | ---------------------------------- | --------------------------------- |
@@ -29,4 +29,4 @@ This is the proposed implementation stack, balancing engineering depth with what
 
 The model choice remains provisional: `qwen3.5:4b` was the earlier candidate. Before committing to it, verify the model's actual availability, license, hardware requirements, reasoning quality, and tool-calling performance.
 
-For the initial implementation, a modular Python monolith is preferable to microservices. Multiple independent server processes would introduce operational complexity before PT needs distributed scaling.
+The initial implementation uses a modular Python monolith. Distributed deployment is deferred.

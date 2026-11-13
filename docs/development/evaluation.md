@@ -4,7 +4,7 @@
 
 > Target architecture derived from Project PT specification v3.0, November 2026. These are planned capabilities unless explicitly stated otherwise.
 
-I would use the following as initial acceptance targets. They are proposed benchmarks, not measured PT results.
+These are proposed acceptance targets for PT.
 
 | Metric                          | Target                                                 |
 | ------------------------------- | ------------------------------------------------------ |

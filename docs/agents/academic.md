@@ -44,5 +44,3 @@ Its capabilities include:
 For example, PT could maintain a knowledge hierarchy of `University -> Unit -> Semester -> Module -> Lecture -> Topic -> Source`.
 
 It could associate a student's incorrect answer with a topic, retrieve the original lecture explanation, provide another practice question, and update mastery estimates.
-
-That workflow is more substantial than a generic chatbot that simply uploads PDFs to an LLM.

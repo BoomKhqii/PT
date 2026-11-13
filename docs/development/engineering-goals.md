@@ -1,12 +1,10 @@
-# What will make PT technically impressive?
+# Engineering goals
 
 [Documentation index](../README.md)
 
 > Target architecture derived from Project PT specification v3.0, November 2026. These are planned capabilities unless explicitly stated otherwise.
 
-PT's value as an engineering project comes from proving that these components operate together correctly.
-
-The strongest work is not the orb, the number of agents, or simply using a local LLM. It is the system engineering behind them.
+The engineering goals cover workflow execution, retrieval, reliability, memory, and evaluation.
 
 Agent orchestration
 

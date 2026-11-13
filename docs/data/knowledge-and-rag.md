@@ -45,8 +45,8 @@ Grounded LLM response
 Return explanation + page citations
 ```
 
-FTS5 is SQLite's native full-text search capability, which makes it a practical lexical-search component in this local architecture.
+The design uses SQLite FTS5 for full-text search.
 
 For your academic use case, the system should prefer original lecture material when asked what a lecturer taught. It should distinguish that from general explanations based on model knowledge.
 
-Important: Scanned PDFs may require an OCR fallback, while slides containing charts, diagrams, and tables may need separate visual extraction. Plain-text chunking alone will not reliably preserve every figure.
+Scanned PDFs may require an OCR fallback, while slides containing charts, diagrams, and tables may need separate visual extraction. Plain-text chunking alone will not reliably preserve every figure.

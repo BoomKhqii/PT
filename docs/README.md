@@ -9,7 +9,7 @@ PT is a Windows-first, locally hosted personal AI assistant. Build a modular Pyt
 1. [Vision and system overview](architecture/overview.md)
 2. [Architecture decisions](decisions/README.md)
 3. [Development roadmap](development/roadmap.md)
-4. [Flagship academic study-guide workflow](workflows/academic-study-guide.md)
+4. [Academic study-guide workflow](workflows/academic-study-guide.md)
 
 ## Architecture
 

@@ -17,4 +17,4 @@ Implement phases with working deliverables. The phase numbers preserve the suppl
 | 6 | Trading analytics | Read-only MT5 reports, OrbCatcher data, backtests, risk analysis, Monte Carlo | Validated analytics with no execution access |
 | 7 | Multi-device platform | Authenticated remote clients, Pi telemetry, backups, deployments | Secure operation across approved devices |
 
-See [evaluation targets](evaluation.md), [engineering goals](engineering-goals.md), and the [flagship academic workflow](../workflows/academic-study-guide.md).
+See [evaluation targets](evaluation.md), [engineering goals](engineering-goals.md), and the [academic study-guide workflow](../workflows/academic-study-guide.md).

@@ -69,6 +69,6 @@ Long-running tasks should not occupy an HTTP request for several minutes.
 
 A background worker processes operations such as document extraction, embedding generation, PDF creation, and large backtest analysis.
 
-For the initial monolith, a durable SQLite-backed job table and dedicated worker process are sufficient.
+The initial design uses a durable SQLite-backed job table and a dedicated worker process.
 
 Each job needs retries, cancellation, status tracking, timeouts, and idempotency—so restarting PT does not accidentally execute the same action twice.

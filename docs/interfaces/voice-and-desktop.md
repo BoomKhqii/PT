@@ -81,4 +81,4 @@ The orb is a presentation client, not the AI engine. It listens to PT's events a
 
 Orb states: **Standby**, **Listening**, **Thinking**, and **Speaking**. Listening indicates that PT is capturing the command.
 
-For the first version, PySide6 is sufficient. Moving the overlay to C++/Qt would only be justified if actual profiling identifies significant performance, rendering, or integration limitations.
+The first version uses PySide6. Profiling results will inform any later move to C++/Qt.

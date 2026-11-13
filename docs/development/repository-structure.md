@@ -1,4 +1,4 @@
-# Recommended project repository
+# Proposed repository structure
 
 [Documentation index](../README.md)
 
@@ -99,4 +99,4 @@ project-pt/
 +-- logs/                       # Gitignored
 ```
 
-This structure provides room for growth while keeping the first release as a coherent application rather than prematurely splitting it into services.
+The proposed layout organizes the first release as a modular application.
