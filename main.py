@@ -15,7 +15,6 @@ import sqlite3
 import asyncio
 import requests
 
-
 MODEL = "qwen3.5:4b"
 conn = sqlite3.connect('pt.db')
 
@@ -39,13 +38,20 @@ system_prompt = AGENTS["general"]  # Default to general agent
 history = []
 should_save = False  # Flag to indicate if the conversation should be saved to memory
 
+USE_ALL_MEMORIES = True  # Temporary test
 
 def ask_pt(message, history): 
+    conn = sqlite3.connect('pt.db')
+
     # Step 1: PT decides which agent to use
     agent, terms = route_request(message)
     memories = []
 
-    if terms:
+    if USE_ALL_MEMORIES:
+        memories = conn.execute(
+            "SELECT id, category, content FROM memory ORDER BY id"
+        ).fetchall()
+    elif terms:
         quoted_terms = ['"' + term.replace('"', '""') + '"' for term in terms]
         query = " OR ".join(quoted_terms)
         memories = retrieve_memory(conn, query)
@@ -78,6 +84,7 @@ def ask_pt(message, history):
                 { "role": "system", "content": system_prompt },
                 *history[-8:],
                 { "role": "user", "content": user_content }
+
             ],
             "think": False, # skips the thinking step and returns the answer directly
             "stream": False
@@ -97,6 +104,7 @@ def ask_pt(message, history):
 
     return answer 
     #return response.json()["message"]["content"]
+
 memory_worker = ThreadPoolExecutor(max_workers=1)
 while True:
     user_input = input("\nYou: ")
