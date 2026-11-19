@@ -11,6 +11,7 @@ from memory.write_gate import write_path_trigger
 from memory.retrieval import retrieve_memory
 from memory.store import store_memory
 from router import route_request
+from router import memoryTerm_request
 
 from math import fabs
 
@@ -50,13 +51,17 @@ system_prompt = AGENTS["general"]  # Default to general agent
 history = []
 should_save = False  # Flag to indicate if the conversation should be saved to memory
 
-USE_ALL_MEMORIES = True  # Temporary test
+USE_ALL_MEMORIES = False  # Temporary test
 
-def ask_pt(message, history): 
+def ask_pt(message, history, agent): 
     conn = sqlite3.connect('pt.db')
 
     # Step 1: PT decides which agent to use
-    agent, terms = route_request(message)
+
+    # For now disabling automatic agent selection
+    #agent, terms = route_request(message)
+    terms = memoryTerm_request(message)
+
     memories = []
 
     if USE_ALL_MEMORIES:
@@ -82,10 +87,11 @@ def ask_pt(message, history):
             f"Current question: {message}"
         )
 
+    # Temporarily disabling automatic agent selection
     print(f"[PT] Delegating to: {agent.upper()}")
 
     # Step 2: Load the specialist's instructions
-    system_prompt = AGENTS[agent]
+    system_prompt = AGENTS[selectingAgent]
 
     # Step 3: Ask Qwen to respond as that specialist
     response = requests.post(
@@ -129,7 +135,7 @@ def conversation_node(state: MessagesState):
         if message.type in ("human", "ai")
     ]
 
-    answer = ask_pt(messages[-1].content, history)
+    answer = ask_pt(messages[-1].content, history, selectingAgent)
 
     if not answer.strip():
         raise ValueError("PT returned an empty answer.")
@@ -149,6 +155,10 @@ thread_id = input("Conversation ID to resume, or Enter for new: ").strip()
 thread_id = thread_id or str(uuid4())
 print(f"Conversation ID: {thread_id}")
 
+
+"trading", "academic", "personal", "general"
+
+selectingAgent = input("Select an Agent (trading, academic, personal, general): ").lower().strip()
 
 memory_worker = ThreadPoolExecutor(max_workers=1)
 with SqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
