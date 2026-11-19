@@ -4,12 +4,24 @@ from Agents.trading import SYSTEM_PROMPT as TRADING_PROMPT
 from Agents.academic import SYSTEM_PROMPT as ACADEMIC_PROMPT
 from Agents.personal import SYSTEM_PROMPT as PERSONAL_PROMPT
 from Agents.general import SYSTEM_PROMPT as GENERAL_PROMPT
+
 from concurrent.futures import ThreadPoolExecutor # For running the trigger in a separate thread
+
 from memory.write_gate import write_path_trigger
 from memory.retrieval import retrieve_memory
 from memory.store import store_memory
 from router import route_request
+
 from math import fabs
+
+from uuid import uuid4
+
+from pathlib import Path
+
+from langchain_core.messages import AIMessage
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.graph import MessagesState, StateGraph, START, END
+
 import json
 import sqlite3
 import asyncio
@@ -82,7 +94,7 @@ def ask_pt(message, history):
             "model": MODEL,
             "messages": [
                 { "role": "system", "content": system_prompt },
-                *history[-8:],
+                *history,
                 { "role": "user", "content": user_content }
 
             ],
@@ -105,33 +117,108 @@ def ask_pt(message, history):
     return answer 
     #return response.json()["message"]["content"]
 
+def conversation_node(state: MessagesState):
+    messages = state["messages"]
+
+    history = [
+        {
+            "role": "user" if message.type == "human" else "assistant",
+            "content": message.content,
+        }
+        for message in messages[:-1]
+        if message.type in ("human", "ai")
+    ]
+
+    answer = ask_pt(messages[-1].content, history)
+
+    if not answer.strip():
+        raise ValueError("PT returned an empty answer.")
+
+    return {"messages": [AIMessage(content=answer)]}
+
+
+builder = StateGraph(MessagesState)
+builder.add_node("conversation", conversation_node)
+builder.add_edge(START, "conversation")
+builder.add_edge("conversation", END)
+
+checkpoint_path = Path(__file__).resolve().with_name("checkpoints.db")
+
+
+thread_id = input("Conversation ID to resume, or Enter for new: ").strip()
+thread_id = thread_id or str(uuid4())
+print(f"Conversation ID: {thread_id}")
+
+
 memory_worker = ThreadPoolExecutor(max_workers=1)
-while True:
-    user_input = input("\nYou: ")
+with SqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
 
-    if(user_input.strip().lower() == "/clear"):
-        history.clear()
-        print("History cleared.")
-        continue
-    if user_input.lower() == "exit":
-        break
+    graph = builder.compile(checkpointer=checkpointer) # Compile the graph with the checkpointer
 
-    history_snapshot = history[-8:] # Take a snapshot of the last 8 messages to pass to the trigger
+    while True:
+        try:
+            user_input = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nExiting...")
+            break
 
-    try:
-        answer = ask_pt(user_input, history)
-        if(answer == ""):
-            print(f"PT: No response received | {requests.RequestException, ValueError}")
-        else:
-            history.extend([
-                {"role": "user", "content": user_input},
-                {"role": "assistant", "content": answer}
-            ])
-            del history[:-8]  # Keep only the last 8 messages
+        command = user_input.lower().strip()
+
+        if command == "/exit":
+            break
+
+        if command == "/clear":
+            # fresh id to start new conversation
+            thread_id = str(uuid4())
+            print(f"New conversation: {thread_id}")
+            continue
+
+        if not command:
+            continue
+
+        config = {"configurable": {"thread_id": thread_id}} # this gives the langraph what thread_id to load and save
+
+        try:
+            # loads the conversatio before adding the current message
+            # new conversation has no saved messages yet
+            saved_messages = graph.get_state(config).values.get( "messages", [] )
+            
+            history_snapshot = [
+                {
+                    "role": (
+                        "user"
+                        if message.type == "human"
+                        else "assistant"
+                    ),
+                    "content": message.content,
+                }
+                for message in saved_messages[-8:]
+                if message.type in ("human", "ai")
+            ]
+            # Submit only the new message.
+            # LangGraph restores previous state, runs conversation_node(),
+            # and checkpoints the updated conversation.
+            result = graph.invoke(
+                {
+                    "messages": [
+                        {"role": "user", "content": user_input}
+                    ]
+                },
+                config,
+            )
+
+            # conversation_node() adds the assistant reply last.
+            answer = result["messages"][-1].content
             print(f"\nPT: {answer}")
 
+            # Evaluate whether this user message contains information
+            # worth saving to long-term memory in pt.db.
             job = memory_worker.submit(
-                write_path_trigger, user_input, history_snapshot
+                write_path_trigger,
+                user_input,
+                history_snapshot,
             )
-    except (requests.RequestException, ValueError) as error:
-        print(f"PT Error: {error}")
+
+        except (requests.RequestException, ValueError) as error:
+            # Report request or validation errors and continue chatting.
+            print(f"PT Error: {error}")
