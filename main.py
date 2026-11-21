@@ -28,6 +28,8 @@ import sqlite3
 import asyncio
 import requests
 
+from memory.retrieval import into_embedding
+
 MODEL = "qwen3.5:4b"
 conn = sqlite3.connect('pt.db')
 
@@ -71,7 +73,7 @@ def ask_pt(message, history, agent):
     elif terms:
         quoted_terms = ['"' + term.replace('"', '""') + '"' for term in terms]
         query = " OR ".join(quoted_terms)
-        memories = retrieve_memory(conn, query)
+        memories = retrieve_memory(query, message)
 
     user_content = message
 
