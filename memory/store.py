@@ -14,6 +14,49 @@ conn.execute("""
         UNIQUE (category, fact_key)
     );
 """)
+
+conn.execute("PRAGMA foreign_keys = ON;")
+
+conn.execute(""" 
+    CREATE TABLE IF NOT EXISTS memory_facts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category TEXT NOT NULL,
+        fact_key TEXT NOT NULL,
+        current_version_id INTEGER,
+
+        UNIQUE (category, fact_key),
+
+        FOREIGN KEY (id, current_version_id)
+            REFERENCES memory_versions (fact_id, id)
+    );
+""")
+
+conn.execute(""" 
+    CREATE TABLE IF NOT EXISTS memory_versions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fact_id INTEGER NOT NULL,
+        version_number INTEGER NOT NULL,
+        content TEXT NOT NULL CHECK (length(trim(content)) > 0),
+
+        recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        valid_from TEXT,
+        valid_until TEXT,
+        source TEXT NOT NULL,
+
+        UNIQUE (fact_id, version_number),
+        UNIQUE (fact_id, id),
+
+        FOREIGN KEY (fact_id)
+            REFERENCES memory_facts (id),
+
+        CHECK (
+            valid_from IS NULL
+            OR valid_until IS NULL
+            OR valid_until > valid_from
+        )
+    );
+""")
+
 columns = {row[1] for row in conn.execute("PRAGMA table_info(memory)")} # Get existing columns in the memory table
 
 # Method to call to store memory in the database
