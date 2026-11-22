@@ -62,7 +62,9 @@ def ask_pt(message, history, agent):
 
     # For now disabling automatic agent selection
     #agent, terms = route_request(message)
-    terms = memoryTerm_request(message)
+    terms, needs_memory = memoryTerm_request(message)
+
+    print(f"Memory Terms: {terms}, Needs Memory: {needs_memory}")
 
     memories = []
 
@@ -70,7 +72,7 @@ def ask_pt(message, history, agent):
         memories = conn.execute(
             "SELECT id, category, content FROM memory ORDER BY id"
         ).fetchall()
-    elif terms:
+    elif needs_memory:
         quoted_terms = ['"' + term.replace('"', '""') + '"' for term in terms]
         query = " OR ".join(quoted_terms)
         memories = retrieve_memory(query, message)
