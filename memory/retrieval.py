@@ -31,36 +31,44 @@ LLM_VALIDITY_PROMPT_SUPPLEMENTARY = """
     - Do not answer the question or include explanations.
 """
 
-threshold = 0.75
+threshold = 0.45
 
-# Create the FTS5 virtual table for memory content if it doesn't exist
-conn.execute(""" 
-    CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5 (
+# Create the FTS5 virtual table for memory versions if it doesn't exist
+conn.execute("""
+    CREATE VIRTUAL TABLE IF NOT EXISTS t_memory_fts USING fts5 (
         content,
-        content ='memory',
-        content_rowid ='id'
+        content='memory_versions',
+        content_rowid = 'id',
     )
 """)
-conn.execute("""INSERT INTO memory_fts(memory_fts) VALUES ('rebuild');""")
+conn.execute("""INSERT INTO t_memory_fts(t_memory_fts) VALUES ('rebuild');""")
 
 # Create the embedded_memories table if it doesn't exist
 conn.execute("""
-     CREATE TABLE IF NOT EXISTS embedded_memories(
+     CREATE TABLE IF NOT EXISTS t_embedded_memories(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category TEXT NOT NULL,
         content TEXT NOT NULL,
+        recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         embedding BLOB
     )
 """)
 
 def retrieve_memory(text, prompt):
+
     conn = sqlite3.connect('pt.db')
-    keyword_matches = fts5_retrieval(conn, text) # id, category, content
+
+    if(text.strip() != ""):
+        keyword_matches = fts5_retrieval(conn, text) # id, category, content
+    else:
+        keyword_matches = []
+
     vector_matches = vector_search_retrieval(conn, prompt) # id, score
 
-    # FTS5 returns (id, category, content)
+    # FTS5 returns (id, category, content, recorded_at)
     candidates_by_id = {
-        memory_id: {"id": memory_id, "category": category, "content": content}
-        for memory_id, category, content in keyword_matches
+        memory_id: {"id": memory_id, "category": category, "content": content, "recorded_at": recorded_at}
+        for memory_id, category, content, recorded_at in keyword_matches
     }
 
     # Vector search returns (id, score)
@@ -69,12 +77,12 @@ def retrieve_memory(text, prompt):
     if missing_ids:
         placeholders = ", ".join("?" for _ in missing_ids)
         rows = conn.execute(
-            f"SELECT id, category, content FROM memory WHERE id IN ({placeholders})",
+            f"SELECT id, category, content, recorded_at FROM t_embedded_memories WHERE id IN ({placeholders})",
             tuple(missing_ids),
         )
-        for memory_id, category, content in rows:
+        for memory_id, category, content, recorded_at in rows:
             candidates_by_id[memory_id] = {
-                "id": memory_id, "category": category, "content": content
+                "id": memory_id, "category": category, "content": content, "recorded_at": recorded_at
             }
 
     candidates = list(candidates_by_id.values())
@@ -98,7 +106,7 @@ def vector_search_retrieval(conn, text): # similarity threshold -> reranker -> t
 
     # Gets all id and embedding from embeddedMemories
     rows = conn.execute(
-        "SELECT id, embedding FROM embedded_memories"
+        "SELECT id, embedding FROM t_embedded_memories"
     ).fetchall()
 
     # Converts all tuple from embeddedMemories bytes to numerical
@@ -121,11 +129,12 @@ def vector_search_retrieval(conn, text): # similarity threshold -> reranker -> t
 
 def fts5_retrieval(conn, text):
     return conn.execute(
-    """
-        SELECT m.id, m.category, m.content
-        FROM memory_fts
-        JOIN memory AS m ON m.id = memory_fts.rowid
-        WHERE memory_fts MATCH ?
+        """
+        SELECT f.id, f.category, v.content, v.recorded_at
+        FROM t_memory_fts
+        JOIN memory_versions AS v ON v.id = t_memory_fts.rowid
+        JOIN memory_facts AS f ON f.id = v.fact_id
+        WHERE t_memory_fts MATCH ?
         ORDER BY rank
         LIMIT 5
         """,
@@ -170,23 +179,29 @@ def llm_validity_check(candidates, prompt):
 # Extract all existing memory content from the database to
 # memories has id and content
 with sqlite3.connect("pt.db") as db:
-    memory = db.execute(
-        "SELECT id, content FROM memory ORDER BY id"
+    memory = db.execute("""
+        SELECT memory_fact.id, memory_fact.category, memory_versions.content, memory_versions.recorded_at 
+        FROM memory_facts
+        JOIN memory_versions ON memory_facts.id = memory_versions.fact_id
+        ORDER BY memory_fact.id
+        """
     ).fetchall()
 
-for t_id, t_content in memory:
+for t_id, t_category, t_content, t_recorded_at in memory:
     if not t_content or not t_content.strip():
         continue
 
     # converting text into vectors
     vector_blob = into_embedding(t_content)
     conn.execute("""
-    INSERT INTO embedded_memories (id, content, embedding)
-    VALUES (?, ?, ?)
+    INSERT INTO t_embedded_memories (id, category, content, recorded_at, embedding)
+    VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
+        category = excluded.category,
         content = excluded.content,
+        recorded_at = excluded.recorded_at,
         embedding = excluded.embedding
-    """, (t_id, t_content, vector_blob))
+    """, (t_id, t_category, t_content, t_recorded_at, vector_blob))
 
 conn.commit()
 conn.close()
