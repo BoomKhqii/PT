@@ -38,7 +38,7 @@ conn.execute("""
     CREATE VIRTUAL TABLE IF NOT EXISTS t_memory_fts USING fts5 (
         content,
         content='memory_versions',
-        content_rowid = 'id',
+        content_rowid = 'id'
     )
 """)
 conn.execute("""INSERT INTO t_memory_fts(t_memory_fts) VALUES ('rebuild');""")
@@ -130,7 +130,7 @@ def vector_search_retrieval(conn, text): # similarity threshold -> reranker -> t
 def fts5_retrieval(conn, text):
     return conn.execute(
         """
-        SELECT f.id, f.category, v.content, v.recorded_at
+        SELECT v.id, f.category, v.content, v.recorded_at
         FROM t_memory_fts
         JOIN memory_versions AS v ON v.id = t_memory_fts.rowid
         JOIN memory_facts AS f ON f.id = v.fact_id
@@ -180,12 +180,11 @@ def llm_validity_check(candidates, prompt):
 # memories has id and content
 with sqlite3.connect("pt.db") as db:
     memory = db.execute("""
-        SELECT memory_fact.id, memory_fact.category, memory_versions.content, memory_versions.recorded_at 
-        FROM memory_facts
-        JOIN memory_versions ON memory_facts.id = memory_versions.fact_id
-        ORDER BY memory_fact.id
-        """
-    ).fetchall()
+        SELECT v.id, f.category, v.content, v.recorded_at
+        FROM memory_versions AS v
+        JOIN memory_facts AS f ON f.id = v.fact_id
+        ORDER BY v.id
+    """).fetchall()
 
 for t_id, t_category, t_content, t_recorded_at in memory:
     if not t_content or not t_content.strip():

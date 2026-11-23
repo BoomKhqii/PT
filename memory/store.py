@@ -59,44 +59,97 @@ conn.execute("""
 
 columns = {row[1] for row in conn.execute("PRAGMA table_info(memory)")} # Get existing columns in the memory table
 
+# memory_Facts has id, category, fact_key, current_version_id
+#memory_versions has id, fact_id, version_number, content, recorded_at, valid_from, valid_until, source
 # Method to call to store memory in the database
 def store_memory(data):
     # Parse the rawContent JSON string into a Python dictionary
-    whatAction = data.get("action", "").lower()  # Check if the action is "insert"
-    category = data.get("scope", "general")
-    content = data.get("fact")
-    fact_key = data["fact_key"] 
-    #validity = data.get("valid_until", None)  # Optional validity field
-
+    category = data.get("category", "general")
+    fact_key = data.get("fact_key")
+    content = data.get("content")
+    source = data.get("source", "user_stated")
+    valid_from = data.get("valid_from", None)
+    valid_until = data.get("valid_until", None)
+    
     if not isinstance(content, str) or not content.strip():
         print("Empty or invalid content, skipping memory storage.")
         return False
     content = content.strip()
 
     conn = sqlite3.connect("pt.db")
-    if whatAction == "upsert":
-        try:
+    conn.execute("PRAGMA foreign_keys = ON")
+
+    try:
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+
+            # Create the logical fact if it does not exist.
             conn.execute(
                 """
-                INSERT INTO memory (category, content, fact_key)
-                VALUES (?, ?, ?)
-                ON CONFLICT(category, fact_key)
-                DO UPDATE SET content = excluded.content
+                INSERT INTO memory_facts (category, fact_key)
+                VALUES (?, ?)
+                ON CONFLICT(category, fact_key) DO NOTHING
                 """,
-                (category, content, fact_key),
+                (category, fact_key),
             )
-            conn.execute("""INSERT INTO memory_fts(memory_fts) VALUES ('rebuild');""")
-            conn.commit()
-            return True
-        finally:
-            conn.close()
-    elif whatAction == "supersede":
-        print("Replace an outdated fact while preserving its history | User changes their project priority")
-        # Supersede the existing fact by updating its content and category
-    else:
-        print("	Wait for clarification before saving | Two facts appear contradictory")
-        #pending contradictio of two facts, we will need to handle this case in the future
-    print(f"Memory stored: {category} | {content} | {fact_key}")
+
+            fact_id, current_version_id = conn.execute(
+                """
+                SELECT id, current_version_id
+                FROM memory_facts
+                WHERE category = ? AND fact_key = ?
+                """,
+                (category, fact_key),
+            ).fetchone()
+
+            # Skip an unchanged version.
+            current = conn.execute(
+                """
+                SELECT content, valid_from, valid_until
+                FROM memory_versions
+                WHERE id = ? AND fact_id = ?
+                """,
+                (current_version_id, fact_id),
+            ).fetchone()
+
+            if current == (content, valid_from, valid_until):
+                return False
+
+            version_number = conn.execute(
+                """
+                SELECT COALESCE(MAX(version_number), 0) + 1
+                FROM memory_versions
+                WHERE fact_id = ?
+                """,
+                (fact_id,),
+            ).fetchone()[0]
+
+            cursor = conn.execute(
+                """
+                INSERT INTO memory_versions (
+                    fact_id, version_number, content,
+                    valid_from, valid_until, source
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    fact_id, version_number, content,
+                    valid_from, valid_until, source,
+                ),
+            )
+
+            conn.execute(
+                """
+                UPDATE memory_facts
+                SET current_version_id = ?
+                WHERE id = ?
+                """,
+                (cursor.lastrowid, fact_id),
+            )
+
+        return True
+    finally:
+        conn.close()
 
 conn.commit()
 conn.close()
