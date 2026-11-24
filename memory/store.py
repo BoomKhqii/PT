@@ -1,6 +1,7 @@
 import sqlite3
 import requests
 import json
+from memory.retrieval import into_embedding
 
 conn = sqlite3.connect('pt.db')
 category = "general" # default category for the memory entry
@@ -146,6 +147,19 @@ def store_memory(data):
                 """,
                 (cursor.lastrowid, fact_id),
             )
+
+            # rebuild the full-text search index for memory content
+            conn.execute("""INSERT INTO t_memory_fts(t_memory_fts) VALUES ('rebuild');""")
+            vector_blob = into_embedding(content)
+            version_id = cursor.lastrowid
+            conn.execute("""
+                INSERT INTO t_embedded_memories (
+                    id, category, content, recorded_at, embedding
+                )
+                SELECT id, ?, content, recorded_at, ?
+                FROM memory_versions
+                WHERE id = ?
+            """, (category, vector_blob, version_id))
 
         return True
     finally:
