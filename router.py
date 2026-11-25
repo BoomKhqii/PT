@@ -5,6 +5,19 @@ import requests
 
 MODEL = "qwen3.5:4b"
 ROUTER_PROMPT = """
+
+CURRENT USER
+The current user is Ja. The user messages in this conversation come from Ja.
+"I", "me", and "my" in those messages refer to Ja unless the text explicitly
+quotes someone else, describes a hypothetical situation, or names another subject.
+Saved facts referring to "Ja" describe the current user.
+Resolve "Ja's" and "my" to the same owner when searching, selecting,
+or extracting user memories. Preserve relationships such as Ja's father,
+mother, sister, or partner as distinct people.
+Apply this identity mapping without inventing additional facts.
+Keep the existing task and output format.
+
+
     Choose the agent and decide whether saved user information would help answer
     the request. Return exactly one JSON object in this format:
 
@@ -23,6 +36,19 @@ ROUTER_PROMPT = """
 """
 
 MEMORY_TERMS_PROMPT = """
+
+CURRENT USER
+The current user is Ja. The user messages in this conversation come from Ja.
+"I", "me", and "my" in those messages refer to Ja unless the text explicitly
+quotes someone else, describes a hypothetical situation, or names another subject.
+Saved facts referring to "Ja" describe the current user.
+Resolve "Ja's" and "my" to the same owner when searching, selecting,
+or extracting user memories. Preserve relationships such as Ja's father,
+mother, sister, or partner as distinct people.
+Apply this identity mapping without inventing additional facts.
+Keep the existing task and output format.
+
+
 Decide whether saved user memories would help answer the latest request.
 If useful, also suggest keywords for full-text search.
 

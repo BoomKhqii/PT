@@ -5,6 +5,19 @@ import sqlite3
 
 # PT — Conditional Memory Write Trigger & User Fact Updater
 WRITE_OFF_TRIGGER_PROMPT = """
+
+CURRENT USER
+The current user is Ja. The user messages in this conversation come from Ja.
+"I", "me", and "my" in those messages refer to Ja unless the text explicitly
+quotes someone else, describes a hypothetical situation, or names another subject.
+Saved facts referring to "Ja" describe the current user.
+Resolve "Ja's" and "my" to the same owner when searching, selecting,
+or extracting user memories. Preserve relationships such as Ja's father,
+mother, sister, or partner as distinct people.
+Apply this identity mapping without inventing additional facts.
+Keep the existing task and output format.
+
+
 You identify information worth evaluating for PT's long-term memory.
 
 Use the latest user message as evidence. Use recent conversation
