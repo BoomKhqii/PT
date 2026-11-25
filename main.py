@@ -57,6 +57,8 @@ should_save = False  # Flag to indicate if the conversation should be saved to m
 USE_ALL_MEMORIES = False  # Temporary test
 
 def main():
+    # Keep terminal prompts and the interactive loop behind the entry-point guard.
+    # server.py imports ask_pt() without starting this terminal session.
     thread_id = input("Conversation ID to resume, or Enter for new: ").strip()
     thread_id = thread_id or str(uuid4())
     print(f"Conversation ID: {thread_id}")
@@ -92,6 +94,7 @@ def main():
             if not command:
                 continue
 
+            # Pass the selected agent to the graph alongside its conversation ID.
             config = {
                 "configurable": {
                     "thread_id": thread_id,
@@ -186,6 +189,7 @@ def ask_pt(message, history, agent):
     print(f"[PT] Delegating to: {agent.upper()}")
 
     # Step 2: Load the specialist's instructions
+    # Use the caller's agent so both the CLI and API can select a specialist.
     system_prompt = AGENTS[agent]
 
     # Step 3: Ask Qwen to respond as that specialist
@@ -230,6 +234,7 @@ def conversation_node(state: MessagesState, config: RunnableConfig):
         if message.type in ("human", "ai")
     ]
 
+    # Read the per-invocation choice instead of main()'s local selectingAgent.
     agent = config["configurable"]["agent"]
     answer = ask_pt(messages[-1].content, history, agent)
 
@@ -247,4 +252,5 @@ builder.add_edge("conversation", END)
 checkpoint_path = Path(__file__).resolve().with_name("checkpoints.db")
 
 if __name__ == "__main__":
+    # Run terminal chat only when this file is launched directly.
     main()

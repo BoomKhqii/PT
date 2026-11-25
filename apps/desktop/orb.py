@@ -11,6 +11,7 @@ import threading
 import requests
 
 
+# Windows treats this color as fully transparent; window alpha controls the rest.
 TRANSPARENT = "#ff00ff"
 PANEL = "#111111"
 FIELD = PANEL
@@ -19,6 +20,7 @@ MUTED = "#c0c0c0"
 
 
 def make_draggable(widget, window, on_click=None):
+    # Use screen coordinates so movement stays consistent as the window moves.
     start = None
     dragging = False
 
@@ -33,6 +35,7 @@ def make_draggable(widget, window, on_click=None):
             return
         mouse_x, mouse_y, window_x, window_y = start
         dx, dy = event.x_root - mouse_x, event.y_root - mouse_y
+        # Small movements still count as clicks and can toggle the chat panel.
         if dragging or math.hypot(dx, dy) >= 5:
             dragging = True
             window.geometry(f"+{window_x + dx}+{window_y + dy}")
@@ -56,6 +59,7 @@ class StatusIcon:
         path = Path(__file__).with_name("assets") / "ring-rika.png"
         sheet = tk.PhotoImage(master=canvas, file=str(path))
         self.frames = []
+        # Slice the horizontal sprite sheet and keep references to each Tk image.
         for x in range(0, sheet.width(), 80):
             frame = tk.PhotoImage(master=canvas, width=80, height=80)
             frame.tk.call(str(frame), "copy", str(sheet), "-from", x, 0, x + 80, 80)
@@ -70,6 +74,7 @@ class StatusIcon:
             self._play(1)
 
     def _play(self, index):
+        # Schedule frames on Tk's event loop so input and dragging stay responsive.
         self.canvas.itemconfigure(self.item, image=self.frames[index])
         if index + 1 < len(self.frames):
             self.timer = self.canvas.after(160, self._play, index + 1)
@@ -77,11 +82,13 @@ class StatusIcon:
             self._breathe(perf_counter())
 
     def _breathe(self, started):
+        # After the transition, gently move the final frame up and down.
         phase = (perf_counter() - started) * math.tau / 5
         self.canvas.coords(self.item, 40, 40 + math.sin(phase))
         self.timer = self.canvas.after(100, self._breathe, started)
 
     def return_to_ring(self):
+        # Cancel the pending animation before restoring the idle frame.
         self.active = False
         if self.timer is not None:
             self.canvas.after_cancel(self.timer)
@@ -91,6 +98,7 @@ class StatusIcon:
 
 
 def main():
+    # The borderless orb and chat are separate windows positioned together.
     orb = tk.Tk()
     orb.title("PT Orb")
     orb.overrideredirect(True)
@@ -115,6 +123,7 @@ def main():
     width, height = 520, size
 
     surface = tk.Canvas(chat, bg=TRANSPARENT, highlightthickness=0)
+    # A thick line with round caps forms the input capsule.
     capsule = surface.create_line(0, 0, 0, 0, fill=PANEL, width=58,
                                   capstyle="round")
     content = tk.Frame(surface, bg=PANEL)
@@ -135,6 +144,7 @@ def main():
     draft.configure(fg=MUTED)
 
     def clear_placeholder(_event):
+        # The muted foreground marks placeholder text until the first interaction.
         if draft.cget("fg") == MUTED:
             draft.delete(0, "end")
             draft.configure(fg=TEXT)
@@ -157,6 +167,7 @@ def main():
     send_button.pack(side="right", padx=(8, 7))
 
     progress = 0.0
+    # progress is the visible width fraction; opened is the animation's target.
     opened = False
     animation = None
     response_font = tkfont.Font(family="Segoe UI", size=11)
@@ -171,12 +182,14 @@ def main():
         """Set preview content and resize the panel. Call on the Tk UI thread."""
         nonlocal response_text
         response_text = str(text)
+        # Temporarily unlock the display to replace its text, then make it read-only.
         response.configure(state="normal")
         response.delete("1.0", "end")
         response.insert("1.0", response_text)
         response.configure(state="disabled")
         position_chat()
 
+    # Expose the display callback for callers running on the Tk UI thread.
     orb.set_response = set_response
 
     def position_chat(_event=None):
@@ -184,6 +197,7 @@ def main():
             return
         x, y = orb.winfo_x(), orb.winfo_y()
         screen_width = orb.winfo_screenwidth()
+        # Open toward the screen center and limit width to the available space.
         right = x + size / 2 < screen_width / 2
         available = screen_width - (x + size - 2) if right else x + 2
         panel_width = max(1, min(width, available))
@@ -203,12 +217,14 @@ def main():
         response_height = min(300, max(64, lines * response_font.metrics("linespace") + 24))
         response_height = min(response_height, max(40, orb.winfo_screenheight() - height - 12))
         has_response = bool(response_text.strip())
+        # Reserve space above the input only while there is a reply or status.
         offset = response_height + 8 if has_response else 0
         total_height = height + offset
         panel_y = max(0, min(y - offset, orb.winfo_screenheight() - total_height))
         visible = max(1, round(panel_width * progress))
         panel_x = x + size - 2 if right else x - visible + 2
         chat.geometry(f"{visible}x{total_height}+{panel_x}+{panel_y}")
+        # Clip the full surface to the animated window width for the sliding effect.
         surface.place(x=0 if right else visible - panel_width, y=0,
                       width=panel_width, height=total_height)
         surface.itemconfigure(response_box, width=max(1, panel_width - 20),
@@ -220,6 +236,7 @@ def main():
         surface.itemconfigure(controls, width=max(1, panel_width - 48))
 
     def animate():
+        # Each scheduled tick moves toward the latest open or closed target.
         nonlocal progress, animation
         progress = min(1.0, progress + 0.065) if opened else max(0.0, progress - 0.065)
         if progress:
@@ -240,6 +257,7 @@ def main():
     def toggle_chat():
         nonlocal opened
         opened = not opened
+        # An existing animation will pick up the new target on its next tick.
         if animation is None:
             animate()
 
@@ -259,9 +277,11 @@ def main():
     make_draggable(canvas, orb, toggle_chat)
     canvas.bind("<Button-3>", show_menu)
     close_button.configure(command=close_chat)
+    # Follow the orb whenever its window moves or changes size.
     orb.bind("<Configure>", position_chat)
     chat.bind("<Escape>", lambda _event: close_chat())
 
+    # Workers put results here; only the Tk thread reads them and updates widgets.
     replies = queue.Queue()
     sending = False
 
@@ -270,25 +290,30 @@ def main():
         try:
             result = requests.post(
                 "http://127.0.0.1:8000/chat",
+                # This value selects the backend agent for every orb message.
                 json={"message": message, "agent": "general"},
                 timeout=300,
             )
             result.raise_for_status()
 
+            # server.py returns a JSON object containing the completed reply.
             answer = result.json()["reply"]
             if not isinstance(answer, str):
                 raise ValueError("The server returned an invalid reply.")
 
             replies.put(answer)
         except (requests.RequestException, ValueError, KeyError) as error:
+            # Route failures through the same display path as successful replies.
             replies.put(f"Could not get a reply: {error}")
 
     def send_message(_event=None):
         nonlocal sending
 
+        # Ignore repeat sends and the placeholder while a request is pending.
         if sending or draft.cget("fg") == MUTED:
             return
 
+        # Read Tk widgets here, before handing plain text to the worker.
         message = draft.get().strip()
         if not message:
             return
@@ -298,6 +323,8 @@ def main():
         draft.delete(0, "end")
         set_response("Thinking…")
 
+        # The network call runs separately so it cannot block Tk's event loop.
+        # A daemon worker does not keep the orb process alive after closing it.
         threading.Thread(
             target=request_reply,
             args=(message,),
@@ -305,6 +332,7 @@ def main():
         ).start()
 
     def check_replies():
+        # This callback runs on the UI thread and never waits for a result.
         nonlocal sending
 
         try:
@@ -316,8 +344,10 @@ def main():
             sending = False
             send_button.configure(state="normal")
 
+        # Keep polling after both empty checks and completed requests.
         orb.after(50, check_replies)
 
+    # Both input methods share validation, loading state, and request handling.
     send_button.configure(command=send_message)
     draft.bind("<Return>", send_message)
     check_replies()
