@@ -154,9 +154,9 @@ def store_memory(data):
             version_id = cursor.lastrowid
             conn.execute("""
                 INSERT INTO t_embedded_memories (
-                    id, category, content, recorded_at, embedding
+                    id, category, content, recorded_at, version_number, embedding
                 )
-                SELECT id, ?, content, recorded_at, ?
+                SELECT id, ?, content, recorded_at, version_number, ?
                 FROM memory_versions
                 WHERE id = ?
             """, (category, vector_blob, version_id))
