@@ -1,14 +1,31 @@
-"""Standalone Windows desktop preview for the PT orb."""
+"""PT's floating Windows interface.
+
+Run this file to create the orb and its sliding chat window. Messages are sent
+to server.py at http://127.0.0.1:8000/chat, so that backend must be running
+to receive an answer.
+
+Reading order:
+    background_brightness: reads screen colors for automatic contrast.
+    make_draggable: handles mouse gestures.
+    StatusIcon: plays the orb's image animation.
+    main: creates widgets and connects their callbacks.
+
+Tk owns the main thread. Mouse events, drawing, and timer callbacks run there.
+The HTTP request uses a worker thread, which returns its result through a queue.
+"""
 
 import math
+import ctypes  # Calls Windows APIs using Python's standard library.
+from ctypes import wintypes
 from pathlib import Path
+from statistics import median
 import tkinter as tk
 import tkinter.font as tkfont
 from time import perf_counter
 
-import queue
-import threading
-import requests
+import queue  # Safely carries replies from the HTTP thread to the UI thread.
+import threading  # Keeps waiting for a reply from freezing the interface.
+import requests  # Sends a message and selected agent to PT's local backend.
 
 
 # Windows treats this color as fully transparent; window alpha controls the rest.
@@ -17,19 +34,86 @@ PANEL = "#111111"
 FIELD = PANEL
 TEXT = "#eeeeee"
 MUTED = "#c0c0c0"
+# Theme names describe the desktop behind PT. The panel contrasts with it.
+# muted is placeholder/disabled text; hover is the selected or hovered surface.
+THEMES = {
+    "light": {"panel": "#14171b", "text": "#f0f2f5", "muted": "#aeb6c0",
+             "hover": "#30353c"},
+    "dark": {"panel": "#edf0f3", "text": "#171d25", "muted": "#515e6c",
+              "hover": "#d2d9e0"},
+}
+
+
+def background_brightness(windows):
+    """Sample nearby desktop pixels outside PT's visible windows on Windows."""
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+    # Declare native argument and return types, including full-size handles on
+    # 64-bit Windows. GetDC acquires a screen drawing context; GetPixel reads it.
+    user32.GetDC.argtypes = [wintypes.HWND]
+    user32.GetDC.restype = wintypes.HDC
+    user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+    user32.ReleaseDC.restype = ctypes.c_int
+    gdi32.GetPixel.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
+    gdi32.GetPixel.restype = wintypes.DWORD
+    # Measure only mapped (currently visible) windows in desktop coordinates.
+    bounds = [(w.winfo_rootx(), w.winfo_rooty(),
+               w.winfo_rootx() + w.winfo_width(),
+               w.winfo_rooty() + w.winfo_height())
+              for w in windows if w.winfo_ismapped()]
+    # Virtual desktop bounds include monitors with negative screen coordinates.
+    left, top = user32.GetSystemMetrics(76), user32.GetSystemMetrics(77)
+    right = left + user32.GetSystemMetrics(78)
+    bottom = top + user32.GetSystemMetrics(79)
+    dc = user32.GetDC(None)
+    if not dc:
+        return None
+    samples = []
+    try:
+        for x1, y1, x2, y2 in bounds:
+            points = []
+            # Sample three positions along each edge, 12 pixels outside the UI.
+            # This approximates the background without reading our own colors.
+            for fraction in (0.2, 0.5, 0.8):
+                x = round(x1 + (x2 - x1) * fraction)
+                y = round(y1 + (y2 - y1) * fraction)
+                points.extend(((x, y1 - 12), (x, y2 + 12),
+                               (x1 - 12, y), (x2 + 12, y)))
+            for x, y in points:
+                # Skip positions beyond the desktop or inside either PT window.
+                if not (left <= x < right and top <= y < bottom):
+                    continue
+                if any(a <= x < c and b <= y < d for a, b, c, d in bounds):
+                    continue
+                color = gdi32.GetPixel(dc, x, y)
+                # Windows reports an unreadable pixel with this sentinel value.
+                if color == 0xFFFFFFFF:
+                    continue
+                r, g, b = color & 255, (color >> 8) & 255, (color >> 16) & 255
+                # COLORREF packs red into the lowest byte. Weight green most
+                # heavily to estimate perceived brightness between zero and one.
+                samples.append((0.2126 * r + 0.7152 * g + 0.0722 * b) / 255)
+    finally:
+        # Always release the context, even if sampling raises an exception.
+        user32.ReleaseDC(None, dc)
+    # The median reduces the effect of individual bright details or text.
+    return median(samples) if samples else None
 
 
 def make_draggable(widget, window, on_click=None):
+    """Move a window with this widget; optionally treat a short gesture as a click."""
     # Use screen coordinates so movement stays consistent as the window moves.
     start = None
     dragging = False
 
     def press(event):
+        """Remember where the mouse and window were when the gesture began."""
         nonlocal start, dragging
         start = (event.x_root, event.y_root, window.winfo_x(), window.winfo_y())
         dragging = False
 
     def move(event):
+        """Apply the mouse displacement to the original window position."""
         nonlocal dragging
         if start is None:
             return
@@ -41,6 +125,7 @@ def make_draggable(widget, window, on_click=None):
             window.geometry(f"+{window_x + dx}+{window_y + dy}")
 
     def release(_event):
+        """Trigger the click action only when the gesture did not become a drag."""
         nonlocal start
         if start is not None and not dragging and on_click is not None:
             on_click()
@@ -55,26 +140,39 @@ class StatusIcon:
     """Manual animation controls. Call these methods on the Tk UI thread."""
 
     def __init__(self, canvas):
+        """Load the ring-to-character sprite strip and display its first frame."""
         self.canvas = canvas
-        path = Path(__file__).with_name("assets") / "ring-rika.png"
-        sheet = tk.PhotoImage(master=canvas, file=str(path))
-        self.frames = []
-        # Slice the horizontal sprite sheet and keep references to each Tk image.
-        for x in range(0, sheet.width(), 80):
-            frame = tk.PhotoImage(master=canvas, width=80, height=80)
-            frame.tk.call(str(frame), "copy", str(sheet), "-from", x, 0, x + 80, 80)
-            self.frames.append(frame)
+        self.palettes = {}
+        for backdrop, tone in (("dark", "pearl"), ("light", "ink")):
+            path = Path(__file__).with_name("assets") / f"ring-rika-{tone}.png"
+            sheet = tk.PhotoImage(master=canvas, file=str(path))
+            frames = []
+            for x in range(0, sheet.width(), 80):
+                frame = tk.PhotoImage(master=canvas, width=80, height=80)
+                frame.tk.call(str(frame), "copy", str(sheet), "-from", x, 0, x + 80, 80)
+                frames.append(frame)
+            self.palettes[backdrop] = frames
+        self.frames = self.palettes["dark"]
+        self.index = 0
         self.item = canvas.create_image(40, 40, image=self.frames[0])
         self.timer = None
         self.active = False
 
+    def set_background(self, backdrop):
+        """Switch ink while preserving the current sprite animation frame."""
+        self.frames = self.palettes[backdrop]
+        self.canvas.itemconfigure(self.item, image=self.frames[self.index])
+
     def transform_to_rika(self):
+        """Start the transition once; repeated calls while active do nothing."""
         if not self.active:
             self.active = True
             self._play(1)
 
     def _play(self, index):
+        """Display the next sprite frame, then start the idle breathing motion."""
         # Schedule frames on Tk's event loop so input and dragging stay responsive.
+        self.index = index
         self.canvas.itemconfigure(self.item, image=self.frames[index])
         if index + 1 < len(self.frames):
             self.timer = self.canvas.after(160, self._play, index + 1)
@@ -82,29 +180,35 @@ class StatusIcon:
             self._breathe(perf_counter())
 
     def _breathe(self, started):
+        """Use elapsed time for a repeating five-second vertical motion."""
         # After the transition, gently move the final frame up and down.
         phase = (perf_counter() - started) * math.tau / 5
         self.canvas.coords(self.item, 40, 40 + math.sin(phase))
         self.timer = self.canvas.after(100, self._breathe, started)
 
     def return_to_ring(self):
+        """Stop animation and restore the original ring image and position."""
         # Cancel the pending animation before restoring the idle frame.
         self.active = False
         if self.timer is not None:
             self.canvas.after_cancel(self.timer)
             self.timer = None
         self.canvas.coords(self.item, 40, 40)
+        self.index = 0
         self.canvas.itemconfigure(self.item, image=self.frames[0])
 
 
 def main():
+    """Build the interface and start Tk's event loop."""
     # The borderless orb and chat are separate windows positioned together.
     orb = tk.Tk()
     orb.title("PT Orb")
     orb.overrideredirect(True)
+    # Remove the native title bar; our drag handler supplies window movement.
     orb.attributes("-topmost", True)
     orb.attributes("-transparentcolor", TRANSPARENT)
-    orb.attributes("-alpha", 0.24)
+    orb.attributes("-alpha", 0.74)
+    # Alpha controls opacity: zero is invisible, one is fully opaque.
     size = 80
     orb.geometry(f"{size}x{size}+{max(0, orb.winfo_screenwidth() - 120)}+100")
 
@@ -115,9 +219,10 @@ def main():
     chat = tk.Toplevel(orb)
     chat.title("PT Chat")
     chat.withdraw()
+    # Build the chat window while hidden. The orb's click callback reveals it.
     chat.overrideredirect(True)
     chat.attributes("-topmost", True)
-    chat.attributes("-alpha", 0.50)
+    chat.attributes("-alpha", 0.81)
     chat.attributes("-transparentcolor", TRANSPARENT)
     chat.configure(bg=TRANSPARENT)
     width, height = 520, size
@@ -127,6 +232,7 @@ def main():
     capsule = surface.create_line(0, 0, 0, 0, fill=PANEL, width=58,
                                   capstyle="round")
     content = tk.Frame(surface, bg=PANEL)
+    # A Canvas can position and clip an embedded Frame during the slide animation.
     controls = surface.create_window(0, height / 2, anchor="w", window=content)
     header = tk.Frame(content, bg=PANEL, cursor="fleur")
     header.pack(side="right", fill="y")
@@ -135,6 +241,7 @@ def main():
                              relief="flat", font=("Segoe UI", 15), cursor="hand2")
     close_button.pack(expand=True)
     make_draggable(header, orb)
+    # Dragging the chat's trailing header moves the orb; position_chat follows it.
 
     composer = tk.Frame(content, bg=PANEL)
     composer.pack(side="left", fill="both", expand=True)
@@ -142,12 +249,17 @@ def main():
                      relief="flat", font=("Segoe UI", 12), width=1)
     draft.insert(0, "Type a message…")
     draft.configure(fg=MUTED)
+    placeholder_visible = True
+    current_theme = THEMES["dark"].copy()
+    # Track the placeholder explicitly so theme color changes cannot erase a draft.
 
     def clear_placeholder(_event):
-        # The muted foreground marks placeholder text until the first interaction.
-        if draft.cget("fg") == MUTED:
+        """Remove the hint on the first click or keypress."""
+        nonlocal placeholder_visible
+        if placeholder_visible:
+            placeholder_visible = False
             draft.delete(0, "end")
-            draft.configure(fg=TEXT)
+            draft.configure(fg=current_theme["text"])
 
     draft.bind("<KeyPress>", clear_placeholder)
     draft.bind("<ButtonPress-1>", clear_placeholder)
@@ -166,6 +278,53 @@ def main():
     )
     send_button.pack(side="right", padx=(8, 7))
 
+    selected_agent = tk.StringVar(master=orb, value="general")
+    agent_label = tk.StringVar(master=orb, value="General  ▾")
+    # Keep the API identifier separate from its human-readable button label.
+    agent_button = tk.Menubutton(
+        composer,
+        textvariable=agent_label,
+        bg=PANEL,
+        fg=MUTED,
+        activebackground="#252525",
+        activeforeground=TEXT,
+        relief="flat",
+        borderwidth=0,
+        highlightthickness=0,
+        cursor="hand2",
+        font=("Segoe UI", 10),
+        padx=8,
+        pady=6,
+        direction="above",
+    )
+    agent_button.pack(side="right", padx=(8, 0))
+    agent_menu = tk.Menu(
+        agent_button,
+        tearoff=False,
+        bg="#202020",
+        fg=TEXT,
+        activebackground="#343434",
+        activeforeground=TEXT,
+        selectcolor="#92d8ff",
+        relief="flat",
+        borderwidth=1,
+        font=("Segoe UI", 10),
+    )
+    agent_button.configure(menu=agent_menu)
+    # Radiobutton entries keep one selected agent and show a selection indicator.
+
+    def update_agent_label():
+        """Refresh the visible label after choosing an agent."""
+        agent_label.set(f"{selected_agent.get().title()}  ▾")
+
+    for agent in ("general", "personal", "academic", "trading"):
+        agent_menu.add_radiobutton(
+            label=agent.title(),
+            value=agent,
+            variable=selected_agent,
+            command=update_agent_label,
+        )
+
     progress = 0.0
     # progress is the visible width fraction; opened is the animation's target.
     opened = False
@@ -176,6 +335,7 @@ def main():
                        padx=14, pady=12, state="disabled", cursor="arrow")
     response_box = surface.create_window(10, 0, anchor="nw", window=response,
                                          state="hidden")
+    # Replies are read-only and appear above the composer only when needed.
     response_text = ""
 
     def set_response(text):
@@ -193,12 +353,14 @@ def main():
     orb.set_response = set_response
 
     def position_chat(_event=None):
+        """Follow the orb, measure the reply, and clip the panel to its slide width."""
         if not progress:
             return
         x, y = orb.winfo_x(), orb.winfo_y()
         screen_width = orb.winfo_screenwidth()
         # Open toward the screen center and limit width to the available space.
         right = x + size / 2 < screen_width / 2
+        # An orb on the left opens right, and an orb on the right opens left.
         available = screen_width - (x + size - 2) if right else x + 2
         panel_width = max(1, min(width, available))
         # Estimate wrapped lines using the actual font's measured word widths.
@@ -215,6 +377,7 @@ def main():
                 lines += max(0, (pixels - 1) // line_width)
                 used += pixels % line_width
         response_height = min(300, max(64, lines * response_font.metrics("linespace") + 24))
+        # Cap the reply height; the Text widget can still scroll longer replies.
         response_height = min(response_height, max(40, orb.winfo_screenheight() - height - 12))
         has_response = bool(response_text.strip())
         # Reserve space above the input only while there is a reply or status.
@@ -236,6 +399,7 @@ def main():
         surface.itemconfigure(controls, width=max(1, panel_width - 48))
 
     def animate():
+        """Advance the sliding window toward its current open/closed target."""
         # Each scheduled tick moves toward the latest open or closed target.
         nonlocal progress, animation
         progress = min(1.0, progress + 0.065) if opened else max(0.0, progress - 0.065)
@@ -255,6 +419,7 @@ def main():
                 draft.focus_set()
 
     def toggle_chat():
+        """Reverse the target while allowing an in-progress animation to continue."""
         nonlocal opened
         opened = not opened
         # An existing animation will pick up the new target on its next tick.
@@ -262,6 +427,7 @@ def main():
             animate()
 
     def close_chat():
+        """Request a closing animation if the panel is currently opening or open."""
         if opened:
             toggle_chat()
 
@@ -269,6 +435,7 @@ def main():
     menu.add_command(label="Quit PT Orb", command=orb.destroy)
 
     def show_menu(event):
+        """Open the right-click quit menu and release its mouse grab afterward."""
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -285,13 +452,13 @@ def main():
     replies = queue.Queue()
     sending = False
 
-    def request_reply(message):
+    def request_reply(message, agent):
+        """Send plain values to the backend and queue a reply or readable error."""
         # Runs in a worker thread. Communicate with the UI through the queue.
         try:
             result = requests.post(
                 "http://127.0.0.1:8000/chat",
-                # This value selects the backend agent for every orb message.
-                json={"message": message, "agent": "general"},
+                json={"message": message, "agent": agent},
                 timeout=300,
             )
             result.raise_for_status()
@@ -307,10 +474,11 @@ def main():
             replies.put(f"Could not get a reply: {error}")
 
     def send_message(_event=None):
+        """Validate the draft, capture the agent, and launch one HTTP request."""
         nonlocal sending
 
         # Ignore repeat sends and the placeholder while a request is pending.
-        if sending or draft.cget("fg") == MUTED:
+        if sending or placeholder_visible:
             return
 
         # Read Tk widgets here, before handing plain text to the worker.
@@ -320,6 +488,9 @@ def main():
 
         sending = True
         send_button.configure(state="disabled")
+        agent_button.configure(state="disabled")
+        # Freeze selection until completion so the visible agent matches this reply.
+        agent = selected_agent.get()
         draft.delete(0, "end")
         set_response("Thinking…")
 
@@ -327,11 +498,12 @@ def main():
         # A daemon worker does not keep the orb process alive after closing it.
         threading.Thread(
             target=request_reply,
-            args=(message,),
+            args=(message, agent),
             daemon=True,
         ).start()
 
     def check_replies():
+        """Poll the thread-safe queue every 50 ms without blocking Tk."""
         # This callback runs on the UI thread and never waits for a result.
         nonlocal sending
 
@@ -343,6 +515,7 @@ def main():
             set_response(answer)
             sending = False
             send_button.configure(state="normal")
+            agent_button.configure(state="normal")
 
         # Keep polling after both empty checks and completed requests.
         orb.after(50, check_replies)
@@ -352,8 +525,73 @@ def main():
     draft.bind("<Return>", send_message)
     check_replies()
 
+    def apply_theme(colors):
+        """Apply the same palette to input, replies, buttons, and both menus."""
+        current_theme.update(colors)
+        panel, text = colors["panel"], colors["text"]
+        for widget in (content, header, composer):
+            widget.configure(bg=panel)
+        surface.itemconfigure(capsule, fill=panel)
+        draft.configure(bg=panel, fg=colors["muted"] if placeholder_visible else text,
+                        insertbackground=text, selectbackground=colors["hover"],
+                        selectforeground=text)
+        response.configure(bg=panel, fg=text, selectbackground=colors["hover"],
+                           selectforeground=text)
+        for widget in (close_button, send_button, agent_button):
+            widget.configure(bg=panel, fg=text, activebackground=colors["hover"],
+                             activeforeground=text, disabledforeground=colors["muted"])
+        for widget in (menu, agent_menu):
+            widget.configure(bg=panel, fg=text, activebackground=colors["hover"],
+                             activeforeground=text)
+        agent_menu.configure(selectcolor=text)
+
+    theme_name = "dark"
+    pending_theme = None
+    # theme_name is committed; pending_theme tracks the previous screen reading.
+
+    def transition_theme(target, step=1, start=None):
+        """Blend RGB channels over ten frames, taking approximately 200 ms."""
+        start = current_theme.copy() if start is None else start
+        fraction = step / 10
+        colors = {}
+        for key, end in THEMES[target].items():
+            # Interpolate each pair of hexadecimal red, green, and blue digits.
+            channels = [
+                round(int(start[key][i:i + 2], 16) * (1 - fraction)
+                      + int(end[i:i + 2], 16) * fraction)
+                for i in (1, 3, 5)
+            ]
+            colors[key] = "#" + "".join(f"{channel:02x}" for channel in channels)
+        apply_theme(colors)
+        if step < 10:
+            orb.after(20, transition_theme, target, step + 1, start)
+
+    def check_background():
+        """Sample nearby colors and switch palettes after two consistent readings."""
+        nonlocal theme_name, pending_theme
+        brightness = background_brightness((orb, chat))
+        target = theme_name
+        if brightness is not None:
+            # The gap between thresholds keeps ambiguous gray backgrounds stable.
+            if brightness > 0.49:
+                target = "light"
+            elif brightness < 0.36:
+                target = "dark"
+        # Require two consistent samples and a neutral band to avoid flickering.
+        if target != theme_name and target == pending_theme:
+            theme_name = target
+            orb.status_icon.set_background(target)
+            transition_theme(target)
+        pending_theme = target
+        orb.after(900, check_background)
+
+    apply_theme(current_theme)
+    # Start theme detection after Tk has had time to position its windows.
+    orb.after(300, check_background)
+    # Tk now handles input, animation timers, and queued replies until Quit.
     orb.mainloop()
 
 
 if __name__ == "__main__":
+    # Launch only when run as a script, so importing does not open desktop windows.
     main()
