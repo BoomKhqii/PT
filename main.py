@@ -22,6 +22,7 @@ from pathlib import Path
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import MessagesState, StateGraph, START, END
+from langchain_core.runnables import RunnableConfig
 
 import json
 import sqlite3
@@ -54,6 +55,96 @@ history = []
 should_save = False  # Flag to indicate if the conversation should be saved to memory
 
 USE_ALL_MEMORIES = False  # Temporary test
+
+def main():
+    thread_id = input("Conversation ID to resume, or Enter for new: ").strip()
+    thread_id = thread_id or str(uuid4())
+    print(f"Conversation ID: {thread_id}")
+
+
+    "trading", "academic", "personal", "general"
+
+    selectingAgent = input("Select an Agent (trading, academic, personal, general): ").lower().strip()
+
+    memory_worker = ThreadPoolExecutor(max_workers=1)
+    with SqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
+
+        graph = builder.compile(checkpointer=checkpointer) # Compile the graph with the checkpointer
+
+        while True:
+            try:
+                user_input = input("You: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nExiting...")
+                break
+
+            command = user_input.lower().strip()
+
+            if command == "/exit":
+                break
+
+            if command == "/clear":
+                # fresh id to start new conversation
+                thread_id = str(uuid4())
+                print(f"New conversation: {thread_id}")
+                continue
+
+            if not command:
+                continue
+
+            config = {
+                "configurable": {
+                    "thread_id": thread_id,
+                    "agent": selectingAgent,
+                }
+            } # this gives the langraph what thread_id to load and save
+
+            try:
+                # loads the conversatio before adding the current message
+                # new conversation has no saved messages yet
+                saved_messages = graph.get_state(config).values.get( "messages", [] )
+            
+                history_snapshot = [
+                    {
+                        "role": (
+                            "user"
+                            if message.type == "human"
+                            else "assistant"
+                        ),
+                        "content": message.content,
+                    }
+                    for message in saved_messages[-8:]
+                    if message.type in ("human", "ai")
+                ]
+                # Submit only the new message.
+                # LangGraph restores previous state, runs conversation_node(),
+                # and checkpoints the updated conversation.
+                result = graph.invoke(
+                    {
+                        "messages": [
+                            {"role": "user", "content": user_input}
+                        ]
+                    },
+                    config,
+                )
+
+                # conversation_node() adds the assistant reply last.
+                answer = result["messages"][-1].content
+                print(f"\nPT: {answer}")
+
+                # Evaluate whether this user message contains information
+                # worth saving to long-term memory in pt.db.
+                job = memory_worker.submit(
+                    write_path_trigger,
+                    user_input,
+                    history_snapshot,
+                )
+
+            except (requests.RequestException, ValueError) as error:
+                # Report request or validation errors and continue chatting.
+                print(f"PT Error: {error}")
+
+
 
 def ask_pt(message, history, agent): 
     conn = sqlite3.connect('pt.db')
@@ -95,7 +186,7 @@ def ask_pt(message, history, agent):
     print(f"[PT] Delegating to: {agent.upper()}")
 
     # Step 2: Load the specialist's instructions
-    system_prompt = AGENTS[selectingAgent]
+    system_prompt = AGENTS[agent]
 
     # Step 3: Ask Qwen to respond as that specialist
     response = requests.post(
@@ -127,7 +218,7 @@ def ask_pt(message, history, agent):
     return answer 
     #return response.json()["message"]["content"]
 
-def conversation_node(state: MessagesState):
+def conversation_node(state: MessagesState, config: RunnableConfig):
     messages = state["messages"]
 
     history = [
@@ -139,7 +230,8 @@ def conversation_node(state: MessagesState):
         if message.type in ("human", "ai")
     ]
 
-    answer = ask_pt(messages[-1].content, history, selectingAgent)
+    agent = config["configurable"]["agent"]
+    answer = ask_pt(messages[-1].content, history, agent)
 
     if not answer.strip():
         raise ValueError("PT returned an empty answer.")
@@ -154,85 +246,5 @@ builder.add_edge("conversation", END)
 
 checkpoint_path = Path(__file__).resolve().with_name("checkpoints.db")
 
-
-thread_id = input("Conversation ID to resume, or Enter for new: ").strip()
-thread_id = thread_id or str(uuid4())
-print(f"Conversation ID: {thread_id}")
-
-
-"trading", "academic", "personal", "general"
-
-selectingAgent = input("Select an Agent (trading, academic, personal, general): ").lower().strip()
-
-memory_worker = ThreadPoolExecutor(max_workers=1)
-with SqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
-
-    graph = builder.compile(checkpointer=checkpointer) # Compile the graph with the checkpointer
-
-    while True:
-        try:
-            user_input = input("You: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nExiting...")
-            break
-
-        command = user_input.lower().strip()
-
-        if command == "/exit":
-            break
-
-        if command == "/clear":
-            # fresh id to start new conversation
-            thread_id = str(uuid4())
-            print(f"New conversation: {thread_id}")
-            continue
-
-        if not command:
-            continue
-
-        config = {"configurable": {"thread_id": thread_id}} # this gives the langraph what thread_id to load and save
-
-        try:
-            # loads the conversatio before adding the current message
-            # new conversation has no saved messages yet
-            saved_messages = graph.get_state(config).values.get( "messages", [] )
-            
-            history_snapshot = [
-                {
-                    "role": (
-                        "user"
-                        if message.type == "human"
-                        else "assistant"
-                    ),
-                    "content": message.content,
-                }
-                for message in saved_messages[-8:]
-                if message.type in ("human", "ai")
-            ]
-            # Submit only the new message.
-            # LangGraph restores previous state, runs conversation_node(),
-            # and checkpoints the updated conversation.
-            result = graph.invoke(
-                {
-                    "messages": [
-                        {"role": "user", "content": user_input}
-                    ]
-                },
-                config,
-            )
-
-            # conversation_node() adds the assistant reply last.
-            answer = result["messages"][-1].content
-            print(f"\nPT: {answer}")
-
-            # Evaluate whether this user message contains information
-            # worth saving to long-term memory in pt.db.
-            job = memory_worker.submit(
-                write_path_trigger,
-                user_input,
-                history_snapshot,
-            )
-
-        except (requests.RequestException, ValueError) as error:
-            # Report request or validation errors and continue chatting.
-            print(f"PT Error: {error}")
+if __name__ == "__main__":
+    main()

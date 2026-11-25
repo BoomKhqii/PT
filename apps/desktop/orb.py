@@ -1,17 +1,21 @@
 """Standalone Windows desktop preview for the PT orb."""
 
 import math
-import random
+from pathlib import Path
 import tkinter as tk
+import tkinter.font as tkfont
 from time import perf_counter
+
+import queue
+import threading
+import requests
 
 
 TRANSPARENT = "#ff00ff"
-PANEL = "#071825"
+PANEL = "#111111"
 FIELD = PANEL
-TEXT = "#d4faff"
-MUTED = "#8bc4d3"
-CYAN = "#42dfff"
+TEXT = "#eeeeee"
+MUTED = "#c0c0c0"
 
 
 def make_draggable(widget, window, on_click=None):
@@ -44,63 +48,46 @@ def make_draggable(widget, window, on_click=None):
     widget.bind("<ButtonRelease-1>", release)
 
 
-def animate_core(canvas):
-    """Draw a layered blue energy core using reusable canvas items."""
-    rng = random.Random(17)
-    started = perf_counter()
-    rings = []
-    for radius, stretch, tilt, phase, color in (
-        (34, 0.91, 0.15, 0.8, "#346487"),
-        (29, 0.52, -0.65, 0.4, "#477c9f"),
-        (14, 0.92, -0.2, 0.0, "#5b9dbb"),
-    ):
-        pieces = []
-        for index in range(4):
-            start = index * math.tau / 4
-            span = rng.uniform(0.72, 1.18)
-            item = canvas.create_line(0, 0, 0, 0, fill=color,
-                                      width=2 if radius <= 14 else 1)
-            pieces.append((item, start, span))
-        rings.append((radius, stretch, tilt, phase, pieces))
+class StatusIcon:
+    """Manual animation controls. Call these methods on the Tk UI thread."""
 
-    particles = [
-        (canvas.create_oval(0, 0, 0, 0, fill=rng.choice((
-            "#3679af", "#50b7ed", "#8ae7ff", "#c3f5ff")), outline=""),
-         rng.uniform(8, 37), rng.uniform(0, math.tau),
-         rng.uniform(0.6, 1.2))
-        for _ in range(7)
-    ]
-    glow = canvas.create_oval(0, 0, 0, 0, outline="#55c6ff", width=2)
-    core = canvas.create_oval(37, 37, 43, 43, fill="#d9faff", outline="")
+    def __init__(self, canvas):
+        self.canvas = canvas
+        path = Path(__file__).with_name("assets") / "ring-rika.png"
+        sheet = tk.PhotoImage(master=canvas, file=str(path))
+        self.frames = []
+        for x in range(0, sheet.width(), 80):
+            frame = tk.PhotoImage(master=canvas, width=80, height=80)
+            frame.tk.call(str(frame), "copy", str(sheet), "-from", x, 0, x + 80, 80)
+            self.frames.append(frame)
+        self.item = canvas.create_image(40, 40, image=self.frames[0])
+        self.timer = None
+        self.active = False
 
-    def point(radius, stretch, tilt, angle):
-        x, y = radius * math.cos(angle), radius * stretch * math.sin(angle)
-        return (40 + x * math.cos(tilt) - y * math.sin(tilt),
-                40 + x * math.sin(tilt) + y * math.cos(tilt))
+    def transform_to_rika(self):
+        if not self.active:
+            self.active = True
+            self._play(1)
 
-    def draw():
-        t = perf_counter() - started
-        beat = math.tau * t / 2.8
-        for radius, stretch, tilt, phase, pieces in rings:
-            pulsing_radius = radius * (1 + 0.075 * math.sin(beat - phase))
-            for item, start, span in pieces:
-                coords = []
-                for step in range(9):
-                    angle = start + span * step / 8
-                    coords.extend(point(pulsing_radius, stretch, tilt, angle))
-                canvas.coords(item, *coords)
-        for item, radius, phase, size in particles:
-            x, y = point(radius * (1 + 0.05 * math.sin(beat - 0.8)), 0.82, 0, phase)
-            pulse = size * (0.78 + 0.22 * math.sin(beat - 0.8))
-            canvas.coords(item, x - pulse, y - pulse, x + pulse, y + pulse)
-        halo = 6 + 1.5 * math.sin(beat)
-        canvas.coords(glow, 40 - halo, 40 - halo, 40 + halo, 40 + halo)
-        center = 3 + 0.6 * math.sin(beat)
-        canvas.coords(core, 40 - center, 40 - center, 40 + center, 40 + center)
-        canvas.tag_raise(core)
-        canvas.after(33, draw)
+    def _play(self, index):
+        self.canvas.itemconfigure(self.item, image=self.frames[index])
+        if index + 1 < len(self.frames):
+            self.timer = self.canvas.after(160, self._play, index + 1)
+        else:
+            self._breathe(perf_counter())
 
-    draw()
+    def _breathe(self, started):
+        phase = (perf_counter() - started) * math.tau / 5
+        self.canvas.coords(self.item, 40, 40 + math.sin(phase))
+        self.timer = self.canvas.after(100, self._breathe, started)
+
+    def return_to_ring(self):
+        self.active = False
+        if self.timer is not None:
+            self.canvas.after_cancel(self.timer)
+            self.timer = None
+        self.canvas.coords(self.item, 40, 40)
+        self.canvas.itemconfigure(self.item, image=self.frames[0])
 
 
 def main():
@@ -109,21 +96,20 @@ def main():
     orb.overrideredirect(True)
     orb.attributes("-topmost", True)
     orb.attributes("-transparentcolor", TRANSPARENT)
-    orb.attributes("-alpha", 0.53)
+    orb.attributes("-alpha", 0.24)
     size = 80
     orb.geometry(f"{size}x{size}+{max(0, orb.winfo_screenwidth() - 120)}+100")
 
     canvas = tk.Canvas(orb, bg=TRANSPARENT, highlightthickness=0, cursor="hand2")
     canvas.pack(fill="both", expand=True)
-    canvas.create_oval(2, 2, 78, 78, fill="#061220", outline="#173753")
-    animate_core(canvas)
+    orb.status_icon = StatusIcon(canvas)
 
     chat = tk.Toplevel(orb)
     chat.title("PT Chat")
     chat.withdraw()
     chat.overrideredirect(True)
     chat.attributes("-topmost", True)
-    chat.attributes("-alpha", 0.60)
+    chat.attributes("-alpha", 0.50)
     chat.attributes("-transparentcolor", TRANSPARENT)
     chat.configure(bg=TRANSPARENT)
     width, height = 520, size
@@ -156,13 +142,42 @@ def main():
     draft.bind("<KeyPress>", clear_placeholder)
     draft.bind("<ButtonPress-1>", clear_placeholder)
     draft.pack(side="left", fill="x", expand=True, ipady=8)
-    tk.Button(composer, text="↑", state="disabled", bg=PANEL,
-              disabledforeground=MUTED, relief="flat", width=2,
-              font=("Segoe UI Semibold", 14)).pack(side="right", padx=(8, 7))
+    send_button = tk.Button(
+        composer,
+        text="↑",
+        bg=PANEL,
+        fg=TEXT,
+        activebackground=FIELD,
+        activeforeground=TEXT,
+        cursor="hand2",
+        relief="flat",
+        width=2,
+        font=("Segoe UI Semibold", 14),
+    )
+    send_button.pack(side="right", padx=(8, 7))
 
     progress = 0.0
     opened = False
     animation = None
+    response_font = tkfont.Font(family="Segoe UI", size=11)
+    response = tk.Text(surface, wrap="word", font=response_font, bg=PANEL,
+                       fg=TEXT, relief="flat", borderwidth=0, highlightthickness=0,
+                       padx=14, pady=12, state="disabled", cursor="arrow")
+    response_box = surface.create_window(10, 0, anchor="nw", window=response,
+                                         state="hidden")
+    response_text = ""
+
+    def set_response(text):
+        """Set preview content and resize the panel. Call on the Tk UI thread."""
+        nonlocal response_text
+        response_text = str(text)
+        response.configure(state="normal")
+        response.delete("1.0", "end")
+        response.insert("1.0", response_text)
+        response.configure(state="disabled")
+        position_chat()
+
+    orb.set_response = set_response
 
     def position_chat(_event=None):
         if not progress:
@@ -172,13 +187,36 @@ def main():
         right = x + size / 2 < screen_width / 2
         available = screen_width - (x + size - 2) if right else x + 2
         panel_width = max(1, min(width, available))
+        # Estimate wrapped lines using the actual font's measured word widths.
+        line_width = max(1, panel_width - 48)
+        lines = 0
+        for paragraph in response_text.split("\n"):
+            used = 0
+            lines += 1
+            for word in paragraph.split():
+                pixels = response_font.measure(word + " ")
+                if used and used + pixels > line_width:
+                    lines += 1
+                    used = 0
+                lines += max(0, (pixels - 1) // line_width)
+                used += pixels % line_width
+        response_height = min(300, max(64, lines * response_font.metrics("linespace") + 24))
+        response_height = min(response_height, max(40, orb.winfo_screenheight() - height - 12))
+        has_response = bool(response_text.strip())
+        offset = response_height + 8 if has_response else 0
+        total_height = height + offset
+        panel_y = max(0, min(y - offset, orb.winfo_screenheight() - total_height))
         visible = max(1, round(panel_width * progress))
         panel_x = x + size - 2 if right else x - visible + 2
-        chat.geometry(f"{visible}x{height}+{panel_x}+{y}")
+        chat.geometry(f"{visible}x{total_height}+{panel_x}+{panel_y}")
         surface.place(x=0 if right else visible - panel_width, y=0,
-                      width=panel_width, height=height)
-        surface.coords(capsule, 29, height / 2, max(30, panel_width - 29), height / 2)
-        surface.coords(controls, 25, height / 2)
+                      width=panel_width, height=total_height)
+        surface.itemconfigure(response_box, width=max(1, panel_width - 20),
+                              height=response_height,
+                              state="normal" if has_response else "hidden")
+        surface.coords(capsule, 29, offset + height / 2,
+                       max(30, panel_width - 29), offset + height / 2)
+        surface.coords(controls, 25, offset + height / 2)
         surface.itemconfigure(controls, width=max(1, panel_width - 48))
 
     def animate():
@@ -223,6 +261,67 @@ def main():
     close_button.configure(command=close_chat)
     orb.bind("<Configure>", position_chat)
     chat.bind("<Escape>", lambda _event: close_chat())
+
+    replies = queue.Queue()
+    sending = False
+
+    def request_reply(message):
+        # Runs in a worker thread. Communicate with the UI through the queue.
+        try:
+            result = requests.post(
+                "http://127.0.0.1:8000/chat",
+                json={"message": message, "agent": "general"},
+                timeout=300,
+            )
+            result.raise_for_status()
+
+            answer = result.json()["reply"]
+            if not isinstance(answer, str):
+                raise ValueError("The server returned an invalid reply.")
+
+            replies.put(answer)
+        except (requests.RequestException, ValueError, KeyError) as error:
+            replies.put(f"Could not get a reply: {error}")
+
+    def send_message(_event=None):
+        nonlocal sending
+
+        if sending or draft.cget("fg") == MUTED:
+            return
+
+        message = draft.get().strip()
+        if not message:
+            return
+
+        sending = True
+        send_button.configure(state="disabled")
+        draft.delete(0, "end")
+        set_response("Thinking…")
+
+        threading.Thread(
+            target=request_reply,
+            args=(message,),
+            daemon=True,
+        ).start()
+
+    def check_replies():
+        nonlocal sending
+
+        try:
+            answer = replies.get_nowait()
+        except queue.Empty:
+            pass
+        else:
+            set_response(answer)
+            sending = False
+            send_button.configure(state="normal")
+
+        orb.after(50, check_replies)
+
+    send_button.configure(command=send_message)
+    draft.bind("<Return>", send_message)
+    check_replies()
+
     orb.mainloop()
 
 
