@@ -31,6 +31,15 @@ import requests
 
 from memory.retrieval import into_embedding
 
+import io
+import wave
+import winsound
+from pathlib import Path
+from piper import PiperVoice
+import re
+
+voice_path = Path(__file__).resolve().parent / "en_GB-jenny_dioco-medium.onnx"
+
 MODEL = "qwen3.5:4b"
 conn = sqlite3.connect('pt.db')
 
@@ -68,6 +77,7 @@ def main():
 
     selectingAgent = input("Select an Agent (trading, academic, personal, general): ").lower().strip()
 
+    voice = PiperVoice.load(str(voice_path)) # Load the voice model once at the start
     memory_worker = ThreadPoolExecutor(max_workers=1)
     with SqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
 
@@ -134,6 +144,7 @@ def main():
                 # conversation_node() adds the assistant reply last.
                 answer = result["messages"][-1].content
                 print(f"\nPT: {answer}")
+                speak(answer, voice)
 
                 # Evaluate whether this user message contains information
                 # worth saving to long-term memory in pt.db.
@@ -147,7 +158,17 @@ def main():
                 # Report request or validation errors and continue chatting.
                 print(f"PT Error: {error}")
 
+def speak(text, voice):
+    if not text.strip():
+        return
 
+    spoken_text = re.sub(r"\bJa\b", "Jah", text)
+    audio = io.BytesIO()
+
+    with wave.open(audio, "wb") as wav_file:
+        voice.synthesize_wav(spoken_text, wav_file)
+
+    winsound.PlaySound(audio.getvalue(), winsound.SND_MEMORY)
 
 def ask_pt(message, history, agent): 
     conn = sqlite3.connect('pt.db')

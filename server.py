@@ -4,6 +4,10 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from main import ask_pt
+from main import speak
+
+from piper import PiperVoice
+from pathlib import Path
 
 # FastAPI discovers this application when running "fastapi dev server.py".
 app = FastAPI()
@@ -24,5 +28,6 @@ def chat(request: ChatRequest):
         history=[],
         agent=request.agent,
     )
+    speak(answer, PiperVoice.load(str(Path(__file__).resolve().parent / "en_GB-jenny_dioco-medium.onnx")))
     # The orb reads this JSON field and displays it in the response panel.
     return {"reply": answer}
