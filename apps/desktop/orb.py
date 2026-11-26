@@ -207,7 +207,7 @@ def main():
     # Remove the native title bar; our drag handler supplies window movement.
     orb.attributes("-topmost", True)
     orb.attributes("-transparentcolor", TRANSPARENT)
-    orb.attributes("-alpha", 0.74)
+    orb.attributes("-alpha", 0.52)
     # Alpha controls opacity: zero is invisible, one is fully opaque.
     size = 80
     orb.geometry(f"{size}x{size}+{max(0, orb.winfo_screenwidth() - 120)}+100")
@@ -222,7 +222,7 @@ def main():
     # Build the chat window while hidden. The orb's click callback reveals it.
     chat.overrideredirect(True)
     chat.attributes("-topmost", True)
-    chat.attributes("-alpha", 0.81)
+    chat.attributes("-alpha", 0.61)
     chat.attributes("-transparentcolor", TRANSPARENT)
     chat.configure(bg=TRANSPARENT)
     width, height = 520, size
@@ -264,8 +264,25 @@ def main():
     draft.bind("<KeyPress>", clear_placeholder)
     draft.bind("<ButtonPress-1>", clear_placeholder)
     draft.pack(side="left", fill="x", expand=True, ipady=8)
+    def rounded_surface(width, height, spacing):
+        """Draw the curved ends around a native control; Tk buttons are rectangular."""
+        shell = tk.Canvas(composer, width=width, height=height, bg=PANEL,
+                          borderwidth=0, highlightthickness=0)
+        shell.pack(side="right", padx=spacing)
+        radius = height / 2
+        if width == height:
+            shell.create_oval(1, 1, width - 1, height - 1, outline="",
+                              fill=FIELD, tags="face")
+        else:
+            shell.create_line(radius, radius, width - radius, radius,
+                              width=height - 2, capstyle="round", fill=FIELD, tags="face")
+        return shell
+
+    # A 28-pixel disc frames a slim arrow. A negative Tk font size uses pixels,
+    # so the arrow stays proportional to the disc at different font settings.
+    send_shell = rounded_surface(28, 28, (5, 7))
     send_button = tk.Button(
-        composer,
+        send_shell,
         text="↑",
         bg=PANEL,
         fg=TEXT,
@@ -273,16 +290,18 @@ def main():
         activeforeground=TEXT,
         cursor="hand2",
         relief="flat",
-        width=2,
-        font=("Segoe UI Semibold", 14),
+        font=("Segoe UI Symbol", -16, "normal"),
     )
-    send_button.pack(side="right", padx=(8, 7))
+    send_button.configure(borderwidth=0, highlightthickness=0, padx=0, pady=0)
+    send_shell.create_window(14, 14, window=send_button, width=17, height=20)
+    send_shell.tag_bind("face", "<ButtonRelease-1>", lambda _event: send_button.invoke())
 
     selected_agent = tk.StringVar(master=orb, value="general")
     agent_label = tk.StringVar(master=orb, value="General  ▾")
     # Keep the API identifier separate from its human-readable button label.
-    agent_button = tk.Menubutton(
-        composer,
+    agent_shell = rounded_surface(110, 32, (6, 0))
+    agent_button = tk.Button(
+        agent_shell,
         textvariable=agent_label,
         bg=PANEL,
         fg=MUTED,
@@ -295,35 +314,97 @@ def main():
         font=("Segoe UI", 10),
         padx=8,
         pady=6,
-        direction="above",
     )
-    agent_button.pack(side="right", padx=(8, 0))
-    agent_menu = tk.Menu(
-        agent_button,
-        tearoff=False,
-        bg="#202020",
-        fg=TEXT,
-        activebackground="#343434",
-        activeforeground=TEXT,
-        selectcolor="#92d8ff",
-        relief="flat",
-        borderwidth=1,
-        font=("Segoe UI", 10),
-    )
-    agent_button.configure(menu=agent_menu)
-    # Radiobutton entries keep one selected agent and show a selection indicator.
+    agent_shell.create_window(55, 16, window=agent_button, width=88, height=22)
+    agents = ("general", "personal", "academic", "trading")
+    row_height, rows_top, picker_width = 35, 36, 182
+    picker_height = rows_top + row_height * len(agents) + 8
+    picker = tk.Toplevel(chat)
+    picker.withdraw()
+    picker.overrideredirect(True)
+    picker.attributes("-topmost", True)
+    picker.attributes("-transparentcolor", TRANSPARENT)
+    picker.attributes("-alpha", 0.91)
+    choices = tk.Canvas(picker, bg=TRANSPARENT, highlightthickness=0)
+    choices.pack(fill="both", expand=True)
+    highlighted = 0
 
-    def update_agent_label():
-        """Refresh the visible label after choosing an agent."""
-        agent_label.set(f"{selected_agent.get().title()}  ▾")
+    def draw_choices():
+        """Use the composer's palette and leave the rounded corners transparent."""
+        choices.delete("all")
+        w, h, r = picker_width, picker_height, 15
+        c = current_theme
+        choices.create_polygon(r,1,w-r,1,w-1,1,w-1,r,w-1,h-r,w-1,h-1,
+                               w-r,h-1,r,h-1,1,h-1,1,h-r,1,r,1,1,
+                               smooth=True, fill=c["panel"], outline=c["hover"])
+        choices.create_text(17, 19, anchor="w", text="Choose agent",
+                            fill=c["muted"], font=("Segoe UI", 9))
+        for i, agent in enumerate(agents):
+            y = rows_top + (i + 0.5) * row_height
+            if i == highlighted:
+                choices.create_line(23, y, w-23, y, width=30, capstyle="round",
+                                    fill=c["hover"])
+            choices.create_text(20, y, anchor="w", text=agent.title(),
+                                fill=c["text"], font=("Segoe UI", 10))
+            if selected_agent.get() == agent:
+                choices.create_text(w-23, y, text="✓", fill=c["text"])
 
-    for agent in ("general", "personal", "academic", "trading"):
-        agent_menu.add_radiobutton(
-            label=agent.title(),
-            value=agent,
-            variable=selected_agent,
-            command=update_agent_label,
-        )
+    def dismiss_picker():
+        """Release menu input and return to the composer."""
+        if picker.grab_current() == choices:
+            choices.grab_release()
+        picker.withdraw()
+
+    def choose_agent(index):
+        """Use the highlighted specialist for subsequent messages."""
+        selected_agent.set(agents[index])
+        agent_label.set(f"{agents[index].title()}  ▾")
+        dismiss_picker()
+        draft.focus_set()
+
+    def highlight(index):
+        nonlocal highlighted
+        highlighted = index % len(agents)
+        draw_choices()
+
+    def pointer_choice(event):
+        """Use screen coordinates so clicks outside the grabbed popup dismiss it."""
+        x = event.x_root - choices.winfo_rootx()
+        y = event.y_root - choices.winfo_rooty()
+        index = (y - rows_top) // row_height
+        inside = 7 <= x < picker_width - 7 and 0 <= index < len(agents)
+        if event.type == tk.EventType.ButtonPress:
+            if inside:
+                choose_agent(index)
+            else:
+                dismiss_picker()
+        elif inside and index != highlighted:
+            highlight(index)
+
+    def open_picker():
+        """Align the popup with the selector, using space above or below it."""
+        x = max(0, min(agent_shell.winfo_rootx() + agent_shell.winfo_width() - picker_width,
+                       orb.winfo_screenwidth() - picker_width))
+        y = agent_shell.winfo_rooty() - picker_height - 5
+        if y < 0:
+            y = agent_shell.winfo_rooty() + agent_shell.winfo_height() + 5
+        picker.geometry(f"{picker_width}x{picker_height}+{x}+{y}")
+        highlight(agents.index(selected_agent.get()))
+        picker.deiconify()
+        picker.lift()
+        choices.focus_force()
+        choices.grab_set()
+
+    agent_button.configure(command=open_picker)
+    agent_shell.tag_bind("face", "<ButtonRelease-1>", lambda _e: agent_button.invoke())
+    choices.bind("<Motion>", pointer_choice)
+    choices.bind("<ButtonPress-1>", pointer_choice)
+    choices.bind("<Up>", lambda _e: highlight(highlighted - 1))
+    choices.bind("<Down>", lambda _e: highlight(highlighted + 1))
+    choices.bind("<Return>", lambda _e: choose_agent(highlighted))
+    choices.bind("<space>", lambda _e: choose_agent(highlighted))
+    choices.bind("<Escape>", lambda _e: (dismiss_picker(), agent_button.focus_set()))
+    choices.bind("<FocusOut>", lambda _e: dismiss_picker())
 
     progress = 0.0
     # progress is the visible width fraction; opened is the animation's target.
@@ -537,13 +618,19 @@ def main():
                         selectforeground=text)
         response.configure(bg=panel, fg=text, selectbackground=colors["hover"],
                            selectforeground=text)
-        for widget in (close_button, send_button, agent_button):
-            widget.configure(bg=panel, fg=text, activebackground=colors["hover"],
+        close_button.configure(bg=panel, fg=text, activebackground=colors["hover"],
+                               activeforeground=text, disabledforeground=colors["muted"])
+        # Both controls use the same surface and foreground in each palette.
+        face = colors["hover"]
+        for shell, widget in ((agent_shell, agent_button), (send_shell, send_button)):
+            shell.configure(bg=panel)
+            shell.itemconfigure("face", fill=face)
+            widget.configure(bg=face, fg=text, activebackground=face,
                              activeforeground=text, disabledforeground=colors["muted"])
-        for widget in (menu, agent_menu):
-            widget.configure(bg=panel, fg=text, activebackground=colors["hover"],
-                             activeforeground=text)
-        agent_menu.configure(selectcolor=text)
+        menu.configure(bg=panel, fg=text, activebackground=colors["hover"],
+                       activeforeground=text)
+        if picker.winfo_ismapped():
+            draw_choices()
 
     theme_name = "dark"
     pending_theme = None
