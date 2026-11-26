@@ -31,12 +31,8 @@ import requests
 
 from memory.retrieval import into_embedding
 
-import io
-import wave
-import winsound
-from pathlib import Path
+from apps.desktop.pt_speech import speak
 from piper import PiperVoice
-import re
 
 voice_path = Path(__file__).resolve().parent / "en_GB-jenny_dioco-medium.onnx"
 
@@ -143,8 +139,9 @@ def main():
 
                 # conversation_node() adds the assistant reply last.
                 answer = result["messages"][-1].content
-                print(f"\nPT: {answer}")
-                speak(answer, voice)
+                if answer:
+                    print(f"\nPT: {answer}")
+                    speak(answer, voice)
 
                 # Evaluate whether this user message contains information
                 # worth saving to long-term memory in pt.db.
@@ -158,19 +155,10 @@ def main():
                 # Report request or validation errors and continue chatting.
                 print(f"PT Error: {error}")
 
-def speak(text, voice):
-    if not text.strip():
-        return
+SILENCE = "<SILENT>"
 
-    spoken_text = re.sub(r"\bJa\b", "Jah", text)
-    audio = io.BytesIO()
 
-    with wave.open(audio, "wb") as wav_file:
-        voice.synthesize_wav(spoken_text, wav_file)
-
-    winsound.PlaySound(audio.getvalue(), winsound.SND_MEMORY)
-
-def ask_pt(message, history, agent): 
+def ask_pt(message, history, agent, listening=False, desktop_context="unknown"):
     conn = sqlite3.connect('pt.db')
 
     # Step 1: PT decides which agent to use
@@ -212,6 +200,33 @@ def ask_pt(message, history, agent):
     # Step 2: Load the specialist's instructions
     # Use the caller's agent so both the CLI and API can select a specialist.
     system_prompt = AGENTS[agent]
+    if listening:
+        system_prompt += (
+            "\nThe desktop orb listens continuously while open. A submitted message may "
+            "contain ambient speech, a conversation with someone else, or the user thinking "
+            "aloud. Stay silent by default in those cases, including when a question is "
+            "clearly addressed to another person. Answer a clear request to PT or a direct "
+            "follow-up. The user can address you naturally without saying your name."
+            " Treat video narration, ads, game dialogue, teammate callouts and sounds "
+            "transcribed as words as background unless the user clearly wants your help. "
+            "Whisper may write sound descriptions in the transcript, such as [clapping], "
+            "(applause), [BLANK_AUDIO], or [silence]. Treat these as audio cues. "
+            "If the transcript contains only sound cues, stay silent. If a cue accompanies "
+            "a request addressed to you, answer the request."
+            " The microphone can also pick up PT's own synthesized voice. If the input "
+            "is recognizably just your reply playing back, stay silent."
+            "An imperative or question in a video or game is not by itself addressed to PT."
+        )
+        hint = {
+            "youtube": "A foreground window title mentioned YouTube during transcription.",
+            "direct3d_fullscreen": "Windows reported a fullscreen Direct3D application, possibly a game.",
+        }.get(desktop_context)
+        if hint:
+            system_prompt += " " + hint + " This is a context hint; the speaker's identity is unknown."
+    system_prompt += (
+        f"\nWhen silence is appropriate or the user asks for no reply, return only {SILENCE}. "
+        "Do not acknowledge, explain your silence, or ask a follow-up in that case."
+    )
 
     # Step 3: Ask Qwen to respond as that specialist
     response = requests.post(
@@ -233,15 +248,8 @@ def ask_pt(message, history, agent):
     response.raise_for_status()
     data = response.json()
     reply = data["message"]
-    answer = reply.get("content", "")
-
-    if not answer.strip(): # detect empty response
-        print("Ollama stop reason:", data.get("done_reason"))
-        print("Generated tokens:", data.get("eval_count"))
-        print("Has thinking text:", bool(reply.get("thinking")))
-
-    return answer 
-    #return response.json()["message"]["content"]
+    answer = reply["content"].strip()
+    return "" if answer == SILENCE else answer
 
 def conversation_node(state: MessagesState, config: RunnableConfig):
     messages = state["messages"]
@@ -258,9 +266,6 @@ def conversation_node(state: MessagesState, config: RunnableConfig):
     # Read the per-invocation choice instead of main()'s local selectingAgent.
     agent = config["configurable"]["agent"]
     answer = ask_pt(messages[-1].content, history, agent)
-
-    if not answer.strip():
-        raise ValueError("PT returned an empty answer.")
 
     return {"messages": [AIMessage(content=answer)]}
 

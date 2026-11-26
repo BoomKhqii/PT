@@ -15,6 +15,10 @@ The HTTP request uses a worker thread, which returns its result through a queue.
 """
 
 import math
+import re
+from collections import deque
+from difflib import SequenceMatcher
+import subprocess
 import ctypes  # Calls Windows APIs using Python's standard library.
 from ctypes import wintypes
 from pathlib import Path
@@ -26,6 +30,12 @@ from time import perf_counter
 import queue  # Safely carries replies from the HTTP thread to the UI thread.
 import threading  # Keeps waiting for a reply from freezing the interface.
 import requests  # Sends a message and selected agent to PT's local backend.
+
+from piper import PiperVoice
+if __package__:
+    from .pt_speech import speak
+else:
+    from pt_speech import speak
 
 
 # Windows treats this color as fully transparent; window alpha controls the rest.
@@ -42,6 +52,55 @@ THEMES = {
     "dark": {"panel": "#edf0f3", "text": "#171d25", "muted": "#515e6c",
               "hover": "#d2d9e0"},
 }
+
+
+SOUND_LABEL = re.compile(
+    r"(?:\[|\()\s*(?:clapping|applause|silence|no (?:sound|speech|noise)|"
+    r"blank[_ ]audio|music(?: playing)?|background noise|laughter|inaudible)"
+    r"\s*(?:\]|\))", re.IGNORECASE
+)
+
+
+def has_speech(text):
+    return bool(re.search(r"[^\W_]", SOUND_LABEL.sub("", text)))
+
+
+def is_playback_echo(text, heard_at, recent_playback):
+    def words(value):
+        return re.findall(r"\w+", SOUND_LABEL.sub("", value).casefold().replace("jah", "ja"))
+
+    heard = words(text)
+    if not heard:
+        return False
+    for reply, start, end in recent_playback:
+        # Whisper emits a segment after the sound and a pause.
+        if not start <= heard_at <= end + 5:
+            continue
+        spoken = words(reply)
+        for i in range(len(spoken)):
+            fragment = spoken[i:i + len(heard)]
+            if heard == fragment:
+                return True
+            if len(heard) >= 5 and SequenceMatcher(None, heard, fragment).ratio() >= 0.88:
+                return True
+    return False
+
+
+def listening_context():
+    """Return a coarse desktop hint when Whisper delivers a segment."""
+    user32 = ctypes.windll.user32
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    title = ctypes.create_unicode_buffer(1024)
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowTextW(user32.GetForegroundWindow(), title, len(title))
+    if "youtube" in title.value.casefold():
+        return "youtube"
+    state = ctypes.c_int()
+    if ctypes.windll.shell32.SHQueryUserNotificationState(ctypes.byref(state)) == 0:
+        # QUNS_RUNNING_D3D_FULL_SCREEN.
+        if state.value == 3:
+            return "direct3d_fullscreen"
+    return "unknown"
 
 
 def background_brightness(windows):
@@ -296,6 +355,12 @@ def main():
     send_shell.create_window(14, 14, window=send_button, width=17, height=20)
     send_shell.tag_bind("face", "<ButtonRelease-1>", lambda _event: send_button.invoke())
 
+    mic_shell = rounded_surface(82, 28, (4, 0))
+    mic_button = tk.Button(mic_shell, text="Mute mic", relief="flat", borderwidth=0,
+                           highlightthickness=0, cursor="hand2", padx=0, pady=0)
+    mic_shell.create_window(41, 14, window=mic_button, width=68, height=22)
+    mic_shell.tag_bind("face", "<ButtonRelease-1>", lambda _event: mic_button.invoke())
+
     selected_agent = tk.StringVar(master=orb, value="general")
     agent_label = tk.StringVar(master=orb, value="General  ▾")
     # Keep the API identifier separate from its human-readable button label.
@@ -531,35 +596,114 @@ def main():
 
     # Workers put results here; only the Tk thread reads them and updates widgets.
     replies = queue.Queue()
+    transcripts = queue.Queue()
+    recent_playback = deque(maxlen=8)
+    voice = None
+    speech_done = queue.Queue()
+    speaking = False
+
+    def play_reply(answer):
+        nonlocal voice
+        started = None
+        try:
+            if voice is None:
+                model = Path(__file__).resolve().parents[2] / "en_GB-jenny_dioco-medium.onnx"
+                voice = PiperVoice.load(str(model))
+            started = perf_counter()
+            speak(answer, voice)
+        except Exception as error:
+            print(f"PT voice error: {error}")
+        finally:
+            speech_done.put((answer, started, perf_counter()))
+
+    listener_errors = queue.Queue()
+    listener = None
+    muted = False
+    mic_generation = 0
     sending = False
 
-    def request_reply(message, agent):
+    def read_microphone(process, generation):
+        # A single pause can produce several timestamped lines in one block.
+        parts = []
+        with process.stdout as lines:
+            for line in lines:
+                segment = re.match(r"^\[[\d:.,]+ --> [\d:.,]+\]\s*(.+)", line)
+                if segment:
+                    parts.append(segment.group(1).strip())
+                elif re.fullmatch(r"### Transcription \d+ END", line.strip()):
+                    message = " ".join(parts).strip()
+                    if has_speech(message):
+                        transcripts.put((message, listening_context(), perf_counter(), generation))
+                    parts.clear()
+        exit_code = process.wait()
+        if listener is process:
+            listener_errors.put(f"Microphone listener stopped (exit {exit_code}).")
+
+    def stop_microphone():
+        nonlocal listener
+        process = listener
+        listener = None
+        if process is not None and process.poll() is None:
+            process.terminate()
+            process.wait()
+
+    def start_microphone():
+        nonlocal listener
+        if muted or sending or speaking or (listener is not None and listener.poll() is None):
+            return
+        folder = Path(__file__).resolve().parents[2] / "Whisper"
+        try:
+            listener = subprocess.Popen(
+                [str(folder / "whisper-stream.exe"), "-m", str(folder / "ggml-base.bin"),
+                 "--step", "0", "-l", "en"],
+                stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except OSError as error:
+            listener_errors.put(f"Could not start microphone listener: {error}")
+            return
+        threading.Thread(target=read_microphone, args=(listener, mic_generation), daemon=True).start()
+
+    def toggle_microphone():
+        nonlocal muted, mic_generation
+        muted = not muted
+        mic_button.configure(text="Unmute mic" if muted else "Mute mic")
+        if muted:
+            mic_generation += 1
+            stop_microphone()
+        else:
+            start_microphone()
+
+    mic_button.configure(command=toggle_microphone)
+
+    def request_reply(message, agent, context, was_listening):
         """Send plain values to the backend and queue a reply or readable error."""
         # Runs in a worker thread. Communicate with the UI through the queue.
         try:
             result = requests.post(
                 "http://127.0.0.1:8000/chat",
-                json={"message": message, "agent": agent},
+                json={"message": message, "agent": agent, "desktop_context": context,
+                      "listening": was_listening},
                 timeout=300,
             )
             result.raise_for_status()
 
             # server.py returns a JSON object containing the completed reply.
-            answer = result.json()["reply"]
+            payload = result.json()
+            answer = payload["reply"]
             if not isinstance(answer, str):
                 raise ValueError("The server returned an invalid reply.")
 
-            replies.put(answer)
+            replies.put((answer, True))
         except (requests.RequestException, ValueError, KeyError) as error:
             # Route failures through the same display path as successful replies.
-            replies.put(f"Could not get a reply: {error}")
+            replies.put((f"Could not get a reply: {error}", False))
 
     def send_message(_event=None):
         """Validate the draft, capture the agent, and launch one HTTP request."""
-        nonlocal sending
 
         # Ignore repeat sends and the placeholder while a request is pending.
-        if sending or placeholder_visible:
+        if sending or speaking or placeholder_visible:
             return
 
         # Read Tk widgets here, before handing plain text to the worker.
@@ -567,36 +711,76 @@ def main():
         if not message:
             return
 
+        draft.delete(0, "end")
+        dispatch(message, "unknown")
+
+    def dispatch(message, context):
+        nonlocal sending
         sending = True
+        was_listening = listener is not None and listener.poll() is None
+        stop_microphone()
         send_button.configure(state="disabled")
         agent_button.configure(state="disabled")
         # Freeze selection until completion so the visible agent matches this reply.
         agent = selected_agent.get()
-        draft.delete(0, "end")
         set_response("Thinking…")
 
         # The network call runs separately so it cannot block Tk's event loop.
         # A daemon worker does not keep the orb process alive after closing it.
         threading.Thread(
             target=request_reply,
-            args=(message, agent),
+            args=(message, agent, context, was_listening),
             daemon=True,
         ).start()
 
     def check_replies():
         """Poll the thread-safe queue every 50 ms without blocking Tk."""
         # This callback runs on the UI thread and never waits for a result.
-        nonlocal sending
-
+        nonlocal sending, speaking
         try:
-            answer = replies.get_nowait()
+            error = listener_errors.get_nowait()
+        except queue.Empty:
+            pass
+        else:
+            set_response(error)
+            if not opened:
+                toggle_chat()
+        try:
+            answer, success = replies.get_nowait()
         except queue.Empty:
             pass
         else:
             set_response(answer)
             sending = False
+            if answer and not opened:
+                toggle_chat()
+            if success and answer.strip():
+                speaking = True
+                worker = threading.Thread(target=play_reply, args=(answer,), daemon=True)
+                orb.after_idle(lambda: orb.after(0, worker.start))
+            else:
+                start_microphone()
+
+        try:
+            spoken, started, ended = speech_done.get_nowait()
+        except queue.Empty:
+            pass
+        else:
+            if started is not None:
+                recent_playback.append((spoken, started, ended))
+            speaking = False
+            start_microphone()
+
+        if not sending and not speaking:
             send_button.configure(state="normal")
             agent_button.configure(state="normal")
+            try:
+                text, context, heard_at, generation = transcripts.get_nowait()
+            except queue.Empty:
+                pass
+            else:
+                if not muted and generation == mic_generation and not is_playback_echo(text, heard_at, recent_playback):
+                    dispatch(text, context)
 
         # Keep polling after both empty checks and completed requests.
         orb.after(50, check_replies)
@@ -622,7 +806,8 @@ def main():
                                activeforeground=text, disabledforeground=colors["muted"])
         # Both controls use the same surface and foreground in each palette.
         face = colors["hover"]
-        for shell, widget in ((agent_shell, agent_button), (send_shell, send_button)):
+        for shell, widget in ((agent_shell, agent_button), (send_shell, send_button),
+                              (mic_shell, mic_button)):
             shell.configure(bg=panel)
             shell.itemconfigure("face", fill=face)
             widget.configure(bg=face, fg=text, activebackground=face,
@@ -676,7 +861,11 @@ def main():
     # Start theme detection after Tk has had time to position its windows.
     orb.after(300, check_background)
     # Tk now handles input, animation timers, and queued replies until Quit.
-    orb.mainloop()
+    orb.after_idle(start_microphone)
+    try:
+        orb.mainloop()
+    finally:
+        stop_microphone()
 
 
 if __name__ == "__main__":

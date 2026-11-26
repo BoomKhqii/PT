@@ -1,7 +1,7 @@
 import sounddevice as sd
 from scipy.io.wavfile import write
 
-fs = 44100  # Sample rate (CD quality)
+fs = 16000  # Sample rate (CD quality)
 seconds = 5  # Duration of recording
 
 print("Recording...")
